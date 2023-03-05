@@ -1,3 +1,4 @@
+import os
 from typing import Any, Union, List, Dict, Tuple, Iterable, Callable
 from dataclasses import dataclass
 from enum import Flag, auto
@@ -75,6 +76,10 @@ class LayerType(Flag):
     AttnV = auto()
     AttnOut = auto()
     
+    # LoRA
+    LoraUp = auto()
+    LoraDown = auto()
+    
     # currently not used
     Other = auto()
     
@@ -117,25 +122,43 @@ def reload_models():
     sd_models.list_models()
     return gr.update(choices=sd_models.checkpoint_tiles())
 
-def retrieve_weights(
+def reload_loras():
+    if lora_mod is None:
+        raise ValueError('Lora is inactive. See `Extensions` tab.')
+    lora_mod.list_available_loras()
+    return list(lora_mod.available_loras.keys())
+
+def load_model(
     model_name: Union[str,None],
-    filter: Union[Callable[[Layer],bool],None] = None
-):
+    lora: bool = False,
+) -> Dict[str,Tensor]:
+    
     if model_name is None or len(model_name) == 0:
         raise ValueError('model was not found.')
-    
-    model_info = sd_models.get_closet_checkpoint_match(model_name)
-    if model_info is None:
-        raise ValueError(f'model was not found: {model_name}')
-    
-    sd = sd_models.read_state_dict(model_info.filename, map_location='cpu')
+
+    if not lora:
+        model_info = sd_models.get_closet_checkpoint_match(model_name)
+        if model_info is None:
+            raise ValueError(f'model was not found: {model_name}')
+        filename = model_info.filename
+    else:
+        if lora_mod is None:
+            raise ValueError('Lora is inactive. See `Extensions` tab.')
+        filename = lora_mod.available_loras[model_name].filename
+
+    return sd_models.read_state_dict(filename, map_location='cpu') # type: ignore
+
+def retrieve_weights(
+    state_dict: Dict[str,Tensor],
+    filter: Union[Callable[[Layer],bool],None] = None
+):
     target_layers: List[Layer] = []
     
     LT = LayerType
     
-    for key in sd.keys(): # type: ignore
+    for key in state_dict.keys(): # type: ignore
         layers = key.split('.') # type: ignore
-        tensor: Tensor = sd[key] # type: ignore
+        tensor: Tensor = state_dict[key] # type: ignore
         
         layer_type = LT.NONE
         
@@ -217,6 +240,11 @@ def retrieve_weights(
         else:
             short_name = key
         
+        if 'lora_up' in layers:
+            layer_type |= LT.LoraUp
+        if 'lora_down' in layers:
+            layer_type |= LT.LoraDown
+        
         if short_name.endswith('.weight'):
             short_name = short_name[:-len('.weight')]
         if short_name.endswith('.bias'):
@@ -240,13 +268,15 @@ def try_to_int(v: str) -> Union[str,int]:
         return v
 
 def repr_values(
-    model_name: Union[str,None],
+    state_dict: Dict[str,Tensor],
     filter: Union[Callable[[Layer],bool],None] = None,
     **kwargs
 ) -> Dict[str,Dict[str,Any]]:
+    
     result: Dict[str,Dict[str,Any]] = dict()
     
-    layers = retrieve_weights(model_name, filter=filter)
+    layers = retrieve_weights(state_dict, filter=filter)
+    
     with tqdm(layers) as tq:
         for layer in tq:
             tq.set_postfix_str(layer.short_name)
@@ -280,11 +310,13 @@ def repr_values(
 
 
 def retrieve_weights2(
-    model_name,
+    model_name: Union[str,None],
+    is_lora: bool,
     wb: List[str],
     network: List[str],
     layer: List[str],
     attn: List[str],
+    lora: List[str],
     value: List[str]
 ):
     # retrieve tensor statistics
@@ -314,23 +346,30 @@ def retrieve_weights2(
     if 'V' in attn:   at |= LT.AttnV
     if 'Out' in attn: at |= LT.AttnOut
     
+    rt = LT.NONE
+    if 'up' in lora:   rt |= LT.LoraUp
+    if 'down' in lora: rt |= LT.LoraDown
+    
     def filter(layer: Layer) -> bool:
         t = layer.type
         x = ((t & wt) and (t & nt) and (t & lt))
         if at != LT.NONE:
             x = x and (t & at)
+        if is_lora and rt != LT.NONE:
+            x = x and (t & rt)
         return x != LayerType.NONE
     
     if 'Mean' in value: kwargs['mean'] = True
     if 'Frobenius' in value: kwargs['fro'] = True
     if 'Histogram' in value: kwargs['values'] = True
     
-    result = repr_values(model_name, filter=filter, **kwargs)
+    result = repr_values(load_model(model_name, lora=is_lora), filter=filter, **kwargs)
     return result
 
 
 def show(
-    model_name,
+    model_name: Union[str,None],
+    lora_name: Union[str,None],
     width: float,
     height: float,
     hmin: Union[str,float],
@@ -339,6 +378,7 @@ def show(
     network: List[str],
     layer: List[str],
     attn: List[str],
+    lora: List[str],
     value: List[str]
 ):
     if len(hmin) == 0: # type: ignore
@@ -351,7 +391,8 @@ def show(
         hmax = float(hmax)
     
     # 1. retrieve tensor statistics
-    result = retrieve_weights2(model_name, wb, network, layer, attn, value)
+    result = retrieve_weights2(model_name, False, wb, network, layer, attn, lora, value)
+    #result2 = retrieve_weights2(lora_name, True, wb, network, layer, attn, lora, value)
     
     # 2. build graph
     import plotly.graph_objects as go
@@ -516,6 +557,15 @@ def show(
 #    
 
 
+from modules import extensions, script_loading
+try:
+    _lora_ext = next(ex for ex in extensions.active() if ex.name == 'Lora')
+    lora_mod = script_loading.load_module(os.path.join(_lora_ext.path, 'lora.py'))
+except:
+    print('[WARN] MatView: Lora is not activated!')
+    lora_mod = None
+
+
 def add_tab():
     def wrap(fn):
         def f(*args, **kwargs):
@@ -534,18 +584,23 @@ def add_tab():
                     models = gr.Dropdown(sd_models.checkpoint_tiles(), elem_id=id('models'), label='Model')
                     refresh = ToolButton(value='\U0001f504', elem_id=id('reload_model'))
                 with gr.Row():
-                    width = gr.Slider(minimum=256, maximum=4096, value=1366, step=1, label='Fig. Width')
-                    height = gr.Slider(minimum=256, maximum=4096, value=768, step=1, label='Fig. Height')
-                with gr.Row():
-                    min = gr.Textbox(value='-0.5', label='Hist. Min')
-                    max = gr.Textbox(value='0.5', label='Hist. Max')
-                run = gr.Button('Show')
+                    loras = gr.Dropdown(list(lora_mod.available_loras.keys()) if lora_mod is not None else [], label='Lora')
+                    refresh_loras = ToolButton(value='\U0001f504')
+                with gr.Accordion('Graph Settings', open=False):
+                    with gr.Row():
+                        width = gr.Slider(minimum=256, maximum=4096, value=1366, step=1, label='Fig. Width')
+                        height = gr.Slider(minimum=256, maximum=4096, value=768, step=1, label='Fig. Height')
+                    with gr.Row():
+                        min = gr.Textbox(value='-0.5', label='Hist. Min')
+                        max = gr.Textbox(value='0.5', label='Hist. Max')
+                run = gr.Button('Show', variant="primary")
             with gr.Column():
                 with gr.Row():
                     wb = gr.CheckboxGroup(choices=['Weight', 'Bias'], value=['Weight'], label='Weight and/or Bias')
                     network = gr.CheckboxGroup(choices=['Text encoder', 'VAE', 'U-Net'], value=['U-Net'], label='Network')
                     layer_type = gr.CheckboxGroup(choices=['Linear', 'Conv', 'SAttn', 'XAttn', 'Norm'], value=['SAttn', 'XAttn'], label='Layer Type')
                     attn_type = gr.CheckboxGroup(choices=['Q', 'K', 'V', 'Out'], value=['Q', 'K', 'V'], label='Attentions')
+                    lora_type = gr.CheckboxGroup(choices=['up', 'down'], value=['up', 'down'], label='LoRA')
                 value_type = gr.CheckboxGroup(choices=['Mean', 'Frobenius', 'Histogram'], value=['Mean'], label='Value')
                 #with gr.Row():
                 #    csv = gr.Button('Download CSV')
@@ -559,7 +614,8 @@ def add_tab():
             pass
     
         refresh.click(fn=wrap(reload_models), inputs=[], outputs=[models, err])
-        run.click(fn=wrap(show), inputs=[models, width, height, min, max, wb, network, layer_type, attn_type, value_type], outputs=[plot, err])
+        refresh_loras.click(fn=wrap(reload_loras), inputs=[], outputs=[loras, err])
+        run.click(fn=wrap(show), inputs=[models, loras, width, height, min, max, wb, network, layer_type, attn_type, lora_type, value_type], outputs=[plot, err])
         #csv.click(fn=wrap(save_csv), inputs=[models, wb, network, layer_type, attn_type], outputs=[out, err])
     
     return [(ui, NAME, NAME.lower())]
