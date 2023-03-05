@@ -534,8 +534,8 @@ def add_tab():
                     models = gr.Dropdown(sd_models.checkpoint_tiles(), elem_id=id('models'), label='Model')
                     refresh = ToolButton(value='\U0001f504', elem_id=id('reload_model'))
                 with gr.Row():
-                    width = gr.Slider(minimum=256, maximum=4096, value=1366, step=1, label='Width')
-                    height = gr.Slider(minimum=256, maximum=4096, value=768, step=1, label='Height')
+                    width = gr.Slider(minimum=256, maximum=4096, value=1366, step=1, label='Fig. Width')
+                    height = gr.Slider(minimum=256, maximum=4096, value=768, step=1, label='Fig. Height')
                 with gr.Row():
                     min = gr.Textbox(value='-0.5', label='Hist. Min')
                     max = gr.Textbox(value='0.5', label='Hist. Max')
