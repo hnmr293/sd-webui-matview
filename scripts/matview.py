@@ -47,7 +47,7 @@ def ensure_install(module_name: str, lib_name: Union[str,None] = None):
 # ---------------------------------------------------------------------------------------
 
 ensure_install('plotly')
-ensure_install('pandas')
+#ensure_install('pandas')
 
 # =======================================================================================
 
@@ -277,32 +277,16 @@ def repr_values(
     
     return result
 
-def histogram(model_name: Union[str,None]):
-    pass
 
-
-def show(
+def retrieve_weight2(
     model_name,
-    width: float,
-    height: float,
-    hmin: Union[str,float],
-    hmax: Union[str,float],
     wb: List[str],
     network: List[str],
     layer: List[str],
     attn: List[str],
     value: List[str]
 ):
-    if len(hmin) == 0: # type: ignore
-        hmin = float('inf')
-    else:
-        hmin = float(hmin)
-    if len(hmax) == 0: # type: ignore
-        hmax = -float('inf')
-    else:
-        hmax = float(hmax)
-    
-    # 1. retrieve tensor statistics
+    # retrieve tensor statistics
     LT = LayerType
     
     kwargs = dict()
@@ -341,9 +325,34 @@ def show(
     if 'Histogram' in value: kwargs['values'] = True
     
     result = repr_values(model_name, filter=filter, **kwargs)
+    return result
+
+
+def show(
+    model_name,
+    width: float,
+    height: float,
+    hmin: Union[str,float],
+    hmax: Union[str,float],
+    wb: List[str],
+    network: List[str],
+    layer: List[str],
+    attn: List[str],
+    value: List[str]
+):
+    if len(hmin) == 0: # type: ignore
+        hmin = float('inf')
+    else:
+        hmin = float(hmin)
+    if len(hmax) == 0: # type: ignore
+        hmax = -float('inf')
+    else:
+        hmax = float(hmax)
+    
+    # 1. retrieve tensor statistics
+    result = retrieve_weight2(model_name, wb, network, layer, attn, value)
     
     # 2. build graph
-    import pandas as pd
     import plotly.graph_objects as go
     
     fig = go.Figure()
@@ -417,6 +426,17 @@ def show(
                     customdata=(hist / torch.sum(hist)).unsqueeze(1),
                 )
             )
+            
+            # fill
+            fig.add_trace(
+                go.Scatter(
+                    x=[x0] * len(xvals), y=yvals, mode='lines',
+                    yaxis='y', showlegend=False,
+                    fill='tonextx', fillcolor=f'rgba({r},{g},{b},0.125)',
+                    line=dict(width=0),
+                    hoverinfo='none',
+                )
+            )
     
     if 'Frobenius' in value:
         x = list(range(len(result)))
@@ -477,20 +497,34 @@ def show(
     )
     
     return fig
+
+
+def save_csv(
+    model_name,
+    wb: List[str],
+    network: List[str],
+    layer: List[str],
+    attn: List[str],
+    value: List[str]
+):
+    # 1. retrieve tensor statistics
+    result = retrieve_weight2(model_name, wb, network, layer, attn, value)
     
-    x = []
-    y = []
-    for name, obj in result.items():
-        x.extend([name] * obj['n'])
-        y.extend(obj['values'])
-    
-    return pd.DataFrame({
-        'Layer': x,
-        'Value': y,
-    })
+    # 2. save data
+    pass
 
 
 def add_tab():
+    def wrap(fn):
+        def f(*args, **kwargs):
+            v, e = None, ''
+            try:
+                v = fn(*args, **kwargs)
+            except Exception as ex:
+                e = str(ex)
+            return [v, e]
+        return f
+    
     with gr.Blocks(analytics_enabled=False) as ui:
         with gr.Row():
             with gr.Column():
@@ -511,14 +545,21 @@ def add_tab():
                     layer_type = gr.CheckboxGroup(choices=['Linear', 'Conv', 'SAttn', 'XAttn', 'Norm'], value=['SAttn', 'XAttn'], label='Layer Type')
                     attn_type = gr.CheckboxGroup(choices=['Q', 'K', 'V', 'Out'], value=['Q', 'K', 'V'], label='Attentions')
                 value_type = gr.CheckboxGroup(choices=['Mean', 'Frobenius', 'Histogram'], value=['Mean'], label='Value')
+                #with gr.Row():
+                #    csv = gr.Button('Download CSV')
+                #    json = gr.Button('Download JSON')
+        
+        err = gr.HTML(elem_id='matview-error')
         
         plot = gr.Plot()
         
         with gr.Group(visible=False):
             pass
     
-        run.click(fn=show, inputs=[models, width, height, min, max, wb, network, layer_type, attn_type, value_type], outputs=[plot])
-        refresh.click(fn=reload_models, inputs=[], outputs=[models])
+        refresh.click(fn=wrap(reload_models), inputs=[], outputs=[models, err])
+        run.click(fn=wrap(show), inputs=[models, width, height, min, max, wb, network, layer_type, attn_type, value_type], outputs=[plot, err])
+        #csv.click(fn=save_csv, inputs=[models, wb, network, layer_type, attn_type, value_type])
+        #json.click(fn=save_json, inputs=[models, wb, network, layer_type, attn_type, value_type])
     
     return [(ui, NAME, NAME.lower())]
 
