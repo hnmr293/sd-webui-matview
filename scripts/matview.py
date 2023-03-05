@@ -5,7 +5,7 @@ ensure_install('plotly')
 #ensure_install('pandas')
 # =======================================================================================
 
-from typing import Union, List
+from typing import Union, List, Dict, Any
 import colorsys
 from math import isinf
 
@@ -13,13 +13,14 @@ import torch
 from torch import Tensor
 import torch.nn.functional as F
 import gradio as gr
+import plotly.graph_objects as go
 
 from modules import script_callbacks, sd_models
 from modules.ui_components import ToolButton
 
 #from scripts.tempcsv import csv_write
 from scripts.matviewlib.lora import available_loras, reload_loras
-from scripts.matviewlib.model import reload_models, retrieve_weights2
+from scripts.matviewlib.model import reload_models, retrieve_weights2, list_models
 
 # =======================================================================================
 
@@ -29,38 +30,15 @@ def id(s: str):
     return f'{NAME.lower()}-{s}'
 
 
-
-def show(
-    model_name: Union[str,None],
-    lora_name: Union[str,None],
+def build_graph(
+    fig: go.Figure,
+    result: Dict[str,Dict[str,Any]],
     width: float,
     height: float,
-    hmin: Union[str,float],
-    hmax: Union[str,float],
-    wb: List[str],
-    network: List[str],
-    layer: List[str],
-    attn: List[str],
-    lora: List[str],
+    hmin: float,
+    hmax: float,
     value: List[str]
 ):
-    if len(hmin) == 0: # type: ignore
-        hmin = float('inf')
-    else:
-        hmin = float(hmin)
-    if len(hmax) == 0: # type: ignore
-        hmax = -float('inf')
-    else:
-        hmax = float(hmax)
-    
-    # 1. retrieve tensor statistics
-    result = retrieve_weights2(model_name, False, wb, network, layer, attn, lora, value)
-    #result2 = retrieve_weights2(lora_name, True, wb, network, layer, attn, lora, value)
-    
-    # 2. build graph
-    import plotly.graph_objects as go
-    
-    fig = go.Figure()
     
     fro_is_right = 'Mean' in value or 'Histogram' in value
     
@@ -204,6 +182,54 @@ def show(
     return fig
 
 
+def show(
+    model_name: Union[str,None],
+    lora_name: Union[str,None],
+    width: float,
+    height: float,
+    hmin: Union[str,float],
+    hmax: Union[str,float],
+    wb: List[str],
+    network: List[str],
+    layer: List[str],
+    attn: List[str],
+    lora: List[str],
+    value: List[str]
+):
+    if len(hmin) == 0: # type: ignore
+        hmin = float('inf')
+    else:
+        hmin = float(hmin)
+    if len(hmax) == 0: # type: ignore
+        hmax = -float('inf')
+    else:
+        hmax = float(hmax)
+    
+    # 1. retrieve tensor statistics
+    
+    if model_name is not None and len(model_name) != 0:
+        result = retrieve_weights2(model_name, False, wb, network, layer, attn, lora, value)
+    else:
+        result = None
+    
+    if lora_name is not None and len(lora_name) != 0:
+        result2 = retrieve_weights2(lora_name, True, wb, network, layer, attn, lora, value)
+    else:
+        result2 = None
+    
+    # 2. build graph
+    
+    fig = go.Figure()
+    
+    if result is not None:
+        build_graph(fig, result, width, height, hmin, hmax, value)
+    
+    if result2 is not None:
+        build_graph(fig, result2, width, height, hmin, hmax, value)
+    
+    return fig
+
+
 #def save_csv(
 #    model_name,
 #    wb: List[str],
@@ -234,7 +260,7 @@ def add_tab():
         with gr.Row():
             with gr.Column():
                 with gr.Row():
-                    models = gr.Dropdown(sd_models.checkpoint_tiles(), elem_id=id('models'), label='Model')
+                    models = gr.Dropdown(list_models(), elem_id=id('models'), label='Model')
                     refresh = ToolButton(value='\U0001f504', elem_id=id('reload_model'))
                 with gr.Row():
                     loras = gr.Dropdown(available_loras(), label='Lora')

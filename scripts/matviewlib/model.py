@@ -8,12 +8,12 @@ import gradio as gr
 from modules import sd_models
 
 from scripts.matviewlib.layer import Layer, LayerType, match_op, match_any
-from scripts.matviewlib.lora import lora_path
+from scripts.matviewlib.lora import lora_path, lora2sd
 from scripts.matviewlib.utils import try_to_int
 
 def reload_models():
     sd_models.list_models()
-    return gr.update(choices=sd_models.checkpoint_tiles())
+    return gr.update(choices=list_models())
 
 def load_model(
     model_name: Union[str,None],
@@ -33,6 +33,9 @@ def load_model(
 
     return sd_models.read_state_dict(filename, map_location='cpu') # type: ignore
 
+def list_models():
+    return [''] + sd_models.checkpoint_tiles()
+
 def retrieve_weights(
     state_dict: Dict[str,Tensor],
     filter: Union[Callable[[Layer],bool],None] = None
@@ -41,9 +44,16 @@ def retrieve_weights(
     
     LT = LayerType
     
+    #import pdb; pdb.set_trace()
     for key in state_dict.keys(): # type: ignore
-        layers = key.split('.') # type: ignore
         tensor: Tensor = state_dict[key] # type: ignore
+        
+        if key.startswith('lora_'):
+            if key.endswith('.alpha'):
+                continue
+            key = lora2sd(key)
+        
+        layers = key.split('.') # type: ignore
         
         layer_type = LT.NONE
         
@@ -230,6 +240,8 @@ def retrieve_weights2(
     if 'down' in lora: rt |= LT.LoraDown
     
     def filter(layer: Layer) -> bool:
+        #if layer.type & LT.UNet:
+        #    import pdb; pdb.set_trace()
         t = layer.type
         x = ((t & wt) and (t & nt) and (t & lt))
         if at != LT.NONE:
