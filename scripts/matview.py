@@ -4,7 +4,6 @@ from enum import Flag, auto
 import colorsys
 from math import isinf
 
-import numpy as np
 import torch
 from torch import Tensor
 import torch.nn.functional as F
@@ -13,6 +12,8 @@ import gradio as gr
 
 from modules import script_callbacks, sd_models
 from modules.ui_components import ToolButton
+
+#from scripts.tempcsv import csv_write
 
 NAME = 'MatView'
 
@@ -278,7 +279,7 @@ def repr_values(
     return result
 
 
-def retrieve_weight2(
+def retrieve_weights2(
     model_name,
     wb: List[str],
     network: List[str],
@@ -350,7 +351,7 @@ def show(
         hmax = float(hmax)
     
     # 1. retrieve tensor statistics
-    result = retrieve_weight2(model_name, wb, network, layer, attn, value)
+    result = retrieve_weights2(model_name, wb, network, layer, attn, value)
     
     # 2. build graph
     import plotly.graph_objects as go
@@ -499,19 +500,20 @@ def show(
     return fig
 
 
-def save_csv(
-    model_name,
-    wb: List[str],
-    network: List[str],
-    layer: List[str],
-    attn: List[str],
-    value: List[str]
-):
-    # 1. retrieve tensor statistics
-    result = retrieve_weight2(model_name, wb, network, layer, attn, value)
-    
-    # 2. save data
-    pass
+#def save_csv(
+#    model_name,
+#    wb: List[str],
+#    network: List[str],
+#    layer: List[str],
+#    attn: List[str],
+#):
+#    # 1. retrieve tensor statistics
+#    result = retrieve_weights2(model_name, wb, network, layer, attn, ['Histogram'])
+#    
+#    # 2. save data
+#    with csv_write(close=False) as (csv, io):
+#        pass
+#    
 
 
 def add_tab():
@@ -547,7 +549,7 @@ def add_tab():
                 value_type = gr.CheckboxGroup(choices=['Mean', 'Frobenius', 'Histogram'], value=['Mean'], label='Value')
                 #with gr.Row():
                 #    csv = gr.Button('Download CSV')
-                #    json = gr.Button('Download JSON')
+                #    out = gr.File()
         
         err = gr.HTML(elem_id='matview-error')
         
@@ -558,8 +560,7 @@ def add_tab():
     
         refresh.click(fn=wrap(reload_models), inputs=[], outputs=[models, err])
         run.click(fn=wrap(show), inputs=[models, width, height, min, max, wb, network, layer_type, attn_type, value_type], outputs=[plot, err])
-        #csv.click(fn=save_csv, inputs=[models, wb, network, layer_type, attn_type, value_type])
-        #json.click(fn=save_json, inputs=[models, wb, network, layer_type, attn_type, value_type])
+        #csv.click(fn=wrap(save_csv), inputs=[models, wb, network, layer_type, attn_type], outputs=[out, err])
     
     return [(ui, NAME, NAME.lower())]
 
