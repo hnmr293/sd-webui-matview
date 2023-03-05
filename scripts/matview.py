@@ -1,9 +1,13 @@
 from typing import Any, Union, List, Dict, Tuple, Iterable, Callable
 from dataclasses import dataclass
 from enum import Flag, auto
+import colorsys
+from math import isinf
 
+import numpy as np
 import torch
-from torch import Tensor, nn
+from torch import Tensor
+import torch.nn.functional as F
 from tqdm import tqdm
 import gradio as gr
 
@@ -68,6 +72,7 @@ class LayerType(Flag):
     AttnQ = auto()
     AttnK = auto()
     AttnV = auto()
+    AttnOut = auto()
     
     # currently not used
     Other = auto()
@@ -165,6 +170,7 @@ def retrieve_weights(
                     'q_proj': LT.AttnQ,
                     'k_proj': LT.AttnK,
                     'v_proj': LT.AttnV,
+                    'out_proj': LT.AttnOut,
                 }, layers)
             
         elif layers[0] == 'first_stage_model':
@@ -180,6 +186,8 @@ def retrieve_weights(
                     layer_type |= LT.AttnK
                 if 'v' in layers:
                     layer_type |= LT.AttnV
+                if 'proj_out' in layers:
+                    layer_type |= LT.AttnOut
         
         elif key.startswith('model.diffusion_model.'):
             # U-Net
@@ -202,6 +210,8 @@ def retrieve_weights(
                 layer_type |= LT.AttnK
             if 'to_v' in layers:
                 layer_type |= LT.AttnV
+            if 'to_out' in layers:
+                layer_type |= LT.AttnOut
         
         else:
             short_name = key
@@ -247,7 +257,7 @@ def repr_values(
             out['n'] = torch.numel(tensor)
             
             if 'values' in kwargs:
-                out['values'] = tensor.flatten().to('cpu').numpy()
+                out['values'] = tensor.flatten().to('cpu')
             if 'fro' in kwargs:
                 out['fro'] = torch.norm(tensor, p='fro').item()
             if 'p' in kwargs:
@@ -275,12 +285,23 @@ def show(
     model_name,
     width: float,
     height: float,
+    hmin: Union[str,float],
+    hmax: Union[str,float],
     wb: List[str],
     network: List[str],
     layer: List[str],
     attn: List[str],
     value: List[str]
 ):
+    if len(hmin) == 0: # type: ignore
+        hmin = float('inf')
+    else:
+        hmin = float(hmin)
+    if len(hmax) == 0: # type: ignore
+        hmax = -float('inf')
+    else:
+        hmax = float(hmax)
+    
     # 1. retrieve tensor statistics
     LT = LayerType
     
@@ -301,16 +322,23 @@ def show(
     if 'SAttn' in layer:  lt |= LT.SAttn
     if 'XAttn' in layer:  lt |= LT.XAttn
     if 'Norm' in layer:   lt |= LT.Norm
-    if 'Q' in attn:       lt |= LT.AttnQ
-    if 'K' in attn:       lt |= LT.AttnK
-    if 'V' in attn:       lt |= LT.AttnV
+    
+    at = LT.NONE
+    if 'Q' in attn:   at |= LT.AttnQ
+    if 'K' in attn:   at |= LT.AttnK
+    if 'V' in attn:   at |= LT.AttnV
+    if 'Out' in attn: at |= LT.AttnOut
     
     def filter(layer: Layer) -> bool:
         t = layer.type
-        return ((t & wt) and (t & nt) and (t & lt)) != LayerType.NONE
+        x = ((t & wt) and (t & nt) and (t & lt))
+        if at != LT.NONE:
+            x = x and (t & at)
+        return x != LayerType.NONE
     
     if 'Mean' in value: kwargs['mean'] = True
     if 'Frobenius' in value: kwargs['fro'] = True
+    if 'Histogram' in value: kwargs['values'] = True
     
     result = repr_values(model_name, filter=filter, **kwargs)
     
@@ -320,14 +348,9 @@ def show(
     
     fig = go.Figure()
     
-    x_title = 'Layer'
-    x_ticks = [v['layer'].short_name for v in result.values()]
-    y1_title = ''
-    y2_title = ''
+    fro_is_right = 'Mean' in value or 'Histogram' in value
     
     if 'Mean' in value:
-        y1_title = 'Mean'
-        
         x = list(range(len(result)))
         y = [v['mean'] for v in result.values()]
         
@@ -352,20 +375,56 @@ def show(
             )
         )
     
-    if 'Frobenius' in value:
-        if 'Mean' not in value:
-            y1_title = 'Frobenius'
-            yaxis = 'y'
-        else:
-            y2_title = 'Frobenius'
-            yaxis = 'y2'
+    if 'Histogram' in value:
+        # retrieve min/max value
+        if isinf(hmin) or isinf(hmax):
+            c_min = float('inf')
+            c_max = -float('inf')
+            for vs in (v['values'] for v in result.values()):
+                v_min = torch.min(vs).item()
+                v_max = torch.max(vs).item()
+                if v_min < c_min: c_min = v_min
+                if c_max < v_max: c_max = v_max
+            if isinf(hmin): hmin = c_min
+            if isinf(hmax): hmax = c_max
         
+        hmin, hmax = min(hmin, hmax), max(hmin, hmax)
+        RANGE = (hmin, hmax)
+        BINS = 500
+        HEIGHT = 2.0
+        for x0, rs in enumerate(result.values()):
+            vs: Tensor = rs['values']
+            n = torch.numel(vs)
+            hist, edges = torch.histogram(vs.float(), BINS, range=RANGE, density=False)
+            #small = torch.sum(vs < RANGE[0]) / n
+            #large = torch.sum(RANGE[1] < vs) / n
+            yvals = F.avg_pool1d(edges.unsqueeze(0), kernel_size=2, stride=1).squeeze()
+            assert tuple(yvals.shape) == (BINS,), tuple(yvals.shape)
+            xvals = x0 + hist / torch.max(hist) * HEIGHT
+            
+            r, g, b = colorsys.hls_to_rgb(x0/len(result)/-3, 0.5, 1.0)
+            r, g, b = int(r*255), int(g*255), int(b*255)
+            fig.add_trace(
+                go.Scatter(
+                    x=xvals, y=yvals, mode='lines', name='Hist.',
+                    yaxis='y', showlegend=False,
+                    line=dict(
+                        color=f'rgba({r},{g},{b},0.25)',
+                        width=1,
+                    ),
+                    hoverlabel=dict(bgcolor='rgba(0,0,0,0.8)'),
+                    hovertemplate=f'{rs["layer"].short_name}<br>%{{y:.3e}}<br>%{{customdata[0]:.3f}}',
+                    customdata=(hist / torch.sum(hist)).unsqueeze(1),
+                )
+            )
+    
+    if 'Frobenius' in value:
         x = list(range(len(result)))
         y = [v['fro'] for v in result.values()]
         fig.add_trace(
             go.Scatter(
                 x=x, y=y, mode='lines+markers', name='Frobenius',
-                yaxis=yaxis,
+                yaxis=['y', 'y2'][fro_is_right],
                 marker=dict(
                     size=6,
                     symbol='circle',
@@ -382,6 +441,16 @@ def show(
                 hoverlabel=dict(bgcolor='rgba(214,214,255,0.8)'),
             )
         )
+    
+    if fro_is_right:
+        y1_title = 'value'
+        y2_title = 'frobenius norm'
+    else:
+        y1_title = 'frobenius norm'
+        y2_title = ''
+    
+    x_title = 'layer'
+    x_ticks = [v['layer'].short_name for v in result.values()]
     
     fig.update_layout(
         autosize=False,
@@ -431,21 +500,24 @@ def add_tab():
                 with gr.Row():
                     width = gr.Slider(minimum=256, maximum=4096, value=1366, step=1, label='Width')
                     height = gr.Slider(minimum=256, maximum=4096, value=768, step=1, label='Height')
+                with gr.Row():
+                    min = gr.Textbox(value='-0.5', label='Hist. Min')
+                    max = gr.Textbox(value='0.5', label='Hist. Max')
                 run = gr.Button('Show')
             with gr.Column():
                 with gr.Row():
                     wb = gr.CheckboxGroup(choices=['Weight', 'Bias'], value=['Weight'], label='Weight and/or Bias')
                     network = gr.CheckboxGroup(choices=['Text encoder', 'VAE', 'U-Net'], value=['U-Net'], label='Network')
                     layer_type = gr.CheckboxGroup(choices=['Linear', 'Conv', 'SAttn', 'XAttn', 'Norm'], value=['SAttn', 'XAttn'], label='Layer Type')
-                    attn_type = gr.CheckboxGroup(choices=['Q', 'K', 'V'], value=['Q', 'K', 'V'], label='Attentions')
-                value_type = gr.CheckboxGroup(choices=['Mean', 'Frobenius'], value=['Mean'], label='Value')
+                    attn_type = gr.CheckboxGroup(choices=['Q', 'K', 'V', 'Out'], value=['Q', 'K', 'V'], label='Attentions')
+                value_type = gr.CheckboxGroup(choices=['Mean', 'Frobenius', 'Histogram'], value=['Mean'], label='Value')
         
         plot = gr.Plot()
         
         with gr.Group(visible=False):
             pass
     
-        run.click(fn=show, inputs=[models, width, height, wb, network, layer_type, attn_type, value_type], outputs=[plot])
+        run.click(fn=show, inputs=[models, width, height, min, max, wb, network, layer_type, attn_type, value_type], outputs=[plot])
         refresh.click(fn=reload_models, inputs=[], outputs=[models])
     
     return [(ui, NAME, NAME.lower())]
