@@ -1,370 +1,33 @@
-import os
-from typing import Any, Union, List, Dict, Tuple, Iterable, Callable
-from dataclasses import dataclass
-from enum import Flag, auto
+# =======================================================================================
+from scripts.matviewlib.utils import ensure_install
+
+ensure_install('plotly')
+#ensure_install('pandas')
+# =======================================================================================
+
+from typing import Union, List
 import colorsys
 from math import isinf
 
 import torch
 from torch import Tensor
 import torch.nn.functional as F
-from tqdm import tqdm
 import gradio as gr
 
 from modules import script_callbacks, sd_models
 from modules.ui_components import ToolButton
 
 #from scripts.tempcsv import csv_write
+from scripts.matviewlib.lora import available_loras, reload_loras
+from scripts.matviewlib.model import reload_models, retrieve_weights2
+
+# =======================================================================================
 
 NAME = 'MatView'
 
-# =======================================================================================
-
-def ensure_install(module_name: str, lib_name: Union[str,None] = None):
-    import sys, traceback
-    from importlib.util import find_spec
-    
-    if lib_name is None:
-        lib_name = module_name
-    
-    if find_spec(module_name) is None:
-        import subprocess
-        try:
-            print('-' * 80, file=sys.stderr)
-            print(f'| installing {lib_name} ...', file=sys.stderr)
-            print('-' * 80, file=sys.stderr)
-            subprocess.check_call(
-                [sys.executable, "-m", "pip", "install", lib_name],
-                stdout=sys.stdout,
-                stderr=sys.stderr
-            )
-        except Exception as e:
-            msg = ''.join(traceback.TracebackException.from_exception(e).format())
-            print(msg, file=sys.stderr)
-            print('-' * 80, file=sys.stderr)
-            print(f'| failed to install {lib_name}. exit...', file=sys.stderr)
-            print('-' * 80, file=sys.stderr)
-            sys.exit(1)
-
-# ---------------------------------------------------------------------------------------
-
-ensure_install('plotly')
-#ensure_install('pandas')
-
-# =======================================================================================
-
-class LayerType(Flag):
-    NONE = 0
-    
-    Weight = 1
-    Bias = auto()
-    
-    # Normalization Layer
-    Norm = auto()
-    
-    # Linear Layer
-    MLP = auto()
-    
-    # ConvND Layer
-    Conv = auto()
-    
-    # Attentions
-    SAttn = auto()
-    XAttn = auto()
-    AttnQ = auto()
-    AttnK = auto()
-    AttnV = auto()
-    AttnOut = auto()
-    
-    # LoRA
-    LoraUp = auto()
-    LoraDown = auto()
-    
-    # currently not used
-    Other = auto()
-    
-    TextEncoder = auto()
-    VAE = auto()
-    UNet = auto()
-
-@dataclass
-class Layer:
-    name: str
-    short_name: str
-    names: List[str]
-    type: LayerType
-    value: Tensor
-
-def match(piece: str, list: List[str]):
-    return any(piece in s for s in list)
-
-def match_any(pieces: Iterable[str], list: List[str]):
-    return any(match(p, list) for p in pieces)
-
-def match_op(table: Dict[Union[str,Tuple[str,...]],LayerType], layers):
-    ty = LayerType.NONE
-    
-    for k, v in table.items():
-        if isinstance(k, str):
-            if match(k, layers):
-                ty |= v
-        elif isinstance(k, tuple):
-            if match_any(k, layers):
-                ty |= v
-    
-    return ty
-    
-    
 def id(s: str):
     return f'{NAME.lower()}-{s}'
 
-def reload_models():
-    sd_models.list_models()
-    return gr.update(choices=sd_models.checkpoint_tiles())
-
-def reload_loras():
-    if lora_mod is None:
-        raise ValueError('Lora is inactive. See `Extensions` tab.')
-    lora_mod.list_available_loras()
-    return list(lora_mod.available_loras.keys())
-
-def load_model(
-    model_name: Union[str,None],
-    lora: bool = False,
-) -> Dict[str,Tensor]:
-    
-    if model_name is None or len(model_name) == 0:
-        raise ValueError('model was not found.')
-
-    if not lora:
-        model_info = sd_models.get_closet_checkpoint_match(model_name)
-        if model_info is None:
-            raise ValueError(f'model was not found: {model_name}')
-        filename = model_info.filename
-    else:
-        if lora_mod is None:
-            raise ValueError('Lora is inactive. See `Extensions` tab.')
-        filename = lora_mod.available_loras[model_name].filename
-
-    return sd_models.read_state_dict(filename, map_location='cpu') # type: ignore
-
-def retrieve_weights(
-    state_dict: Dict[str,Tensor],
-    filter: Union[Callable[[Layer],bool],None] = None
-):
-    target_layers: List[Layer] = []
-    
-    LT = LayerType
-    
-    for key in state_dict.keys(): # type: ignore
-        layers = key.split('.') # type: ignore
-        tensor: Tensor = state_dict[key] # type: ignore
-        
-        layer_type = LT.NONE
-        
-        if key.endswith('.bias'):
-            layer_type |= LT.Bias
-        if key.endswith('.weight'):
-            layer_type |= LT.Weight
-            dim = tensor.dim()
-            if dim == 1:
-                # normalization (really?)
-                layer_type |= LT.Norm
-            elif dim == 2:
-                # linear
-                layer_type |= LT.MLP
-            else:
-                # conv
-                layer_type |= LT.Conv
-                
-        
-        if layers[0] == 'cond_stage_model':
-            # text encoder
-            layer_type |= LT.TextEncoder
-            short_name = '.'.join(['TE'] + layers[3:])
-            
-            if 'transformer' not in layers:
-                continue
-            if '.embeddings.' in key:
-                continue
-            
-            if match_any('attn', layers):
-                layer_type |= LT.SAttn
-                layer_type |= match_op({
-                    'q_proj': LT.AttnQ,
-                    'k_proj': LT.AttnK,
-                    'v_proj': LT.AttnV,
-                    'out_proj': LT.AttnOut,
-                }, layers)
-            
-        elif layers[0] == 'first_stage_model':
-            # VAE
-            layer_type |= LT.VAE
-            short_name = '.'.join(['VAE'] + layers[1:])
-            
-            if match_any('attn', layers):
-                layer_type |= LT.SAttn
-                if 'q' in layers:
-                    layer_type |= LT.AttnQ
-                if 'k' in layers:
-                    layer_type |= LT.AttnK
-                if 'v' in layers:
-                    layer_type |= LT.AttnV
-                if 'proj_out' in layers:
-                    layer_type |= LT.AttnOut
-        
-        elif key.startswith('model.diffusion_model.'):
-            # U-Net
-            layer_type |= LT.UNet
-            
-            abbr = {
-                'input_blocks': 'IN',
-                'output_blocks': 'OUT',
-                'middle_block': 'M',
-            }
-            short_name = '.'.join(['UNet'] + [ abbr.get(v, v) for v in layers[2:] ])
-            
-            if 'attn1' in layers:
-                layer_type |= LT.SAttn
-            if 'attn2' in layers:
-                layer_type |= LT.XAttn
-            if 'to_q' in layers:
-                layer_type |= LT.AttnQ
-            if 'to_k' in layers:
-                layer_type |= LT.AttnK
-            if 'to_v' in layers:
-                layer_type |= LT.AttnV
-            if 'to_out' in layers:
-                layer_type |= LT.AttnOut
-        
-        else:
-            short_name = key
-        
-        if 'lora_up' in layers:
-            layer_type |= LT.LoraUp
-        if 'lora_down' in layers:
-            layer_type |= LT.LoraDown
-        
-        if short_name.endswith('.weight'):
-            short_name = short_name[:-len('.weight')]
-        if short_name.endswith('.bias'):
-            short_name = short_name[:-len('.bias')]
-        
-        layer = Layer(key, short_name, layers, layer_type, tensor)
-        if filter is None or filter(layer):
-            target_layers.append(layer)
-    
-    target_layers = sorted(target_layers, key=lambda x: tuple(map(try_to_int, x.names)))
-    
-    #for l in target_layers:
-    #    print(l.name)
-    
-    return target_layers
-
-def try_to_int(v: str) -> Union[str,int]:
-    try:
-        return int(v)
-    except ValueError:
-        return v
-
-def repr_values(
-    state_dict: Dict[str,Tensor],
-    filter: Union[Callable[[Layer],bool],None] = None,
-    **kwargs
-) -> Dict[str,Dict[str,Any]]:
-    
-    result: Dict[str,Dict[str,Any]] = dict()
-    
-    layers = retrieve_weights(state_dict, filter=filter)
-    
-    with tqdm(layers) as tq:
-        for layer in tq:
-            tq.set_postfix_str(layer.short_name)
-            tensor = layer.value
-            
-            out = dict()
-            
-            out['layer'] = layer
-            out['n'] = torch.numel(tensor)
-            
-            if 'values' in kwargs:
-                out['values'] = tensor.flatten().to('cpu')
-            if 'fro' in kwargs:
-                out['fro'] = torch.norm(tensor, p='fro').item()
-            if 'p' in kwargs:
-                out['p'] = torch.norm(tensor, p=kwargs['p']).item() # type: ignore
-            if 'mean' in kwargs or 'std' in kwargs:
-                std, mean = torch.std_mean(tensor)
-                if 'mean' in kwargs:
-                    out['mean'] = mean.item()
-                if 'std' in kwargs:
-                    out['std'] = std.item()
-            if 'max' in kwargs:
-                out['max'] = torch.max(tensor).item()
-            if 'min' in kwargs:
-                out['min'] = torch.min(tensor).item()
-            
-            result[layer.name] = out
-    
-    return result
-
-
-def retrieve_weights2(
-    model_name: Union[str,None],
-    is_lora: bool,
-    wb: List[str],
-    network: List[str],
-    layer: List[str],
-    attn: List[str],
-    lora: List[str],
-    value: List[str]
-):
-    # retrieve tensor statistics
-    LT = LayerType
-    
-    kwargs = dict()
-    
-    wt = LT.NONE
-    if 'Weight' in wb: wt |= LT.Weight
-    if 'Bias' in wb:   wt |= LT.Bias
-    
-    nt = LT.NONE
-    if 'Text encoder' in network: nt |= LT.TextEncoder
-    if 'VAE' in network:          nt |= LT.VAE
-    if 'U-Net' in network:        nt |= LT.UNet
-    
-    lt = LT.NONE
-    if 'Linear' in layer: lt |= LT.MLP
-    if 'Conv' in layer:   lt |= LT.Conv
-    if 'SAttn' in layer:  lt |= LT.SAttn
-    if 'XAttn' in layer:  lt |= LT.XAttn
-    if 'Norm' in layer:   lt |= LT.Norm
-    
-    at = LT.NONE
-    if 'Q' in attn:   at |= LT.AttnQ
-    if 'K' in attn:   at |= LT.AttnK
-    if 'V' in attn:   at |= LT.AttnV
-    if 'Out' in attn: at |= LT.AttnOut
-    
-    rt = LT.NONE
-    if 'up' in lora:   rt |= LT.LoraUp
-    if 'down' in lora: rt |= LT.LoraDown
-    
-    def filter(layer: Layer) -> bool:
-        t = layer.type
-        x = ((t & wt) and (t & nt) and (t & lt))
-        if at != LT.NONE:
-            x = x and (t & at)
-        if is_lora and rt != LT.NONE:
-            x = x and (t & rt)
-        return x != LayerType.NONE
-    
-    if 'Mean' in value: kwargs['mean'] = True
-    if 'Frobenius' in value: kwargs['fro'] = True
-    if 'Histogram' in value: kwargs['values'] = True
-    
-    result = repr_values(load_model(model_name, lora=is_lora), filter=filter, **kwargs)
-    return result
 
 
 def show(
@@ -556,16 +219,6 @@ def show(
 #        pass
 #    
 
-
-from modules import extensions, script_loading
-try:
-    _lora_ext = next(ex for ex in extensions.active() if ex.name == 'Lora')
-    lora_mod = script_loading.load_module(os.path.join(_lora_ext.path, 'lora.py'))
-except:
-    print('[WARN] MatView: Lora is not activated!')
-    lora_mod = None
-
-
 def add_tab():
     def wrap(fn):
         def f(*args, **kwargs):
@@ -584,7 +237,7 @@ def add_tab():
                     models = gr.Dropdown(sd_models.checkpoint_tiles(), elem_id=id('models'), label='Model')
                     refresh = ToolButton(value='\U0001f504', elem_id=id('reload_model'))
                 with gr.Row():
-                    loras = gr.Dropdown(list(lora_mod.available_loras.keys()) if lora_mod is not None else [], label='Lora')
+                    loras = gr.Dropdown(available_loras(), label='Lora')
                     refresh_loras = ToolButton(value='\U0001f504')
                 with gr.Accordion('Graph Settings', open=False):
                     with gr.Row():
