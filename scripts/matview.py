@@ -42,7 +42,7 @@ def ensure_install(module_name: str, lib_name: Union[str,None] = None):
 
 # ---------------------------------------------------------------------------------------
 
-#ensure_install('plotly')
+ensure_install('plotly')
 ensure_install('pandas')
 
 # =======================================================================================
@@ -246,6 +246,8 @@ def repr_values(
             out['layer'] = layer
             out['n'] = torch.numel(tensor)
             
+            if 'values' in kwargs:
+                out['values'] = tensor.flatten().to('cpu').numpy()
             if 'fro' in kwargs:
                 out['fro'] = torch.norm(tensor, p='fro').item()
             if 'p' in kwargs:
@@ -271,13 +273,15 @@ def histogram(model_name: Union[str,None]):
 
 def show(
     model_name,
+    width: float,
+    height: float,
     wb: List[str],
     network: List[str],
     layer: List[str],
     attn: List[str],
     value: List[str]
 ):
-    import pandas as pd
+    # 1. retrieve tensor statistics
     LT = LayerType
     
     kwargs = dict()
@@ -310,25 +314,111 @@ def show(
     
     result = repr_values(model_name, filter=filter, **kwargs)
     
-    df = []
+    # 2. build graph
+    import pandas as pd
+    import plotly.graph_objects as go
+    
+    fig = go.Figure()
+    
+    x_title = 'Layer'
+    x_ticks = [v['layer'].short_name for v in result.values()]
+    y1_title = ''
+    y2_title = ''
     
     if 'Mean' in value:
-        mean = pd.DataFrame({
-            'Layer': [v['layer'].short_name for v in result.values()],
-            'Type': ['Mean'] * len(result),
-            'Value': [v['mean'] for v in result.values()]
-        })
-        df.append(mean)
+        y1_title = 'Mean'
+        
+        x = list(range(len(result)))
+        y = [v['mean'] for v in result.values()]
+        
+        fig.add_trace(
+            go.Scatter(
+                x=x, y=y, mode='lines+markers', name='Mean',
+                yaxis='y',
+                marker=dict(
+                    size=6,
+                    symbol='circle',
+                    color='rgba(0,0,0,0)',
+                    line=dict(
+                        color='rgba(255,128,128,1)',
+                        width=1,
+                    ),
+                ),
+                line=dict(
+                    color='rgba(255,128,128,0.5)',
+                    width=2,
+                ),
+                hoverlabel=dict(bgcolor='rgba(255,214,214,0.8)'),
+            )
+        )
     
     if 'Frobenius' in value:
-        fro = pd.DataFrame({
-            'Layer': [v['layer'].short_name for v in result.values()],
-            'Type': ['Frobenius'] * len(result),
-            'Value': [v['fro'] for v in result.values()]
-        })
-        df.append(fro)
+        if 'Mean' not in value:
+            y1_title = 'Frobenius'
+            yaxis = 'y'
+        else:
+            y2_title = 'Frobenius'
+            yaxis = 'y2'
+        
+        x = list(range(len(result)))
+        y = [v['fro'] for v in result.values()]
+        fig.add_trace(
+            go.Scatter(
+                x=x, y=y, mode='lines+markers', name='Frobenius',
+                yaxis=yaxis,
+                marker=dict(
+                    size=6,
+                    symbol='circle',
+                    color='rgba(0,0,0,0)',
+                    line=dict(
+                        color='rgba(128,128,255,1)',
+                        width=1,
+                    ),
+                ),
+                line=dict(
+                    color='rgba(128,128,255,0.5)',
+                    width=2,
+                ),
+                hoverlabel=dict(bgcolor='rgba(214,214,255,0.8)'),
+            )
+        )
     
-    return pd.concat(df)
+    fig.update_layout(
+        autosize=False,
+        width=int(width),
+        height=int(height),
+        hoverlabel=dict(font_family='monospace'),
+        xaxis=dict(
+            title=x_title,
+            tickmode='array',
+            tickvals=list(range(len(result))),
+            ticktext=x_ticks,
+        ),
+        yaxis=dict(
+            title=y1_title,
+            side='left',
+            tickformat='.3e' if 'Mean' in value else '~g',
+        ),
+        yaxis2=dict(
+            title=y2_title,
+            side='right',
+            tickformat='~g',
+            overlaying='y',
+        ),
+    )
+    
+    return fig
+    
+    x = []
+    y = []
+    for name, obj in result.items():
+        x.extend([name] * obj['n'])
+        y.extend(obj['values'])
+    
+    return pd.DataFrame({
+        'Layer': x,
+        'Value': y,
+    })
 
 
 def add_tab():
@@ -338,6 +428,9 @@ def add_tab():
                 with gr.Row():
                     models = gr.Dropdown(sd_models.checkpoint_tiles(), elem_id=id('models'), label='Model')
                     refresh = ToolButton(value='\U0001f504', elem_id=id('reload_model'))
+                with gr.Row():
+                    width = gr.Slider(minimum=256, maximum=4096, value=1366, step=1, label='Width')
+                    height = gr.Slider(minimum=256, maximum=4096, value=768, step=1, label='Height')
                 run = gr.Button('Show')
             with gr.Column():
                 with gr.Row():
@@ -347,12 +440,12 @@ def add_tab():
                     attn_type = gr.CheckboxGroup(choices=['Q', 'K', 'V'], value=['Q', 'K', 'V'], label='Attentions')
                 value_type = gr.CheckboxGroup(choices=['Mean', 'Frobenius'], value=['Mean'], label='Value')
         
-        plot = gr.LinePlot(x='Layer', y='Value', color='Type', y_title='', width=1280, height=480, tooltip=['Layer', 'Type', 'Value'])
+        plot = gr.Plot()
         
         with gr.Group(visible=False):
             pass
     
-        run.click(fn=show, inputs=[models, wb, network, layer_type, attn_type, value_type], outputs=[plot])
+        run.click(fn=show, inputs=[models, width, height, wb, network, layer_type, attn_type, value_type], outputs=[plot])
         refresh.click(fn=reload_models, inputs=[], outputs=[models])
     
     return [(ui, NAME, NAME.lower())]
