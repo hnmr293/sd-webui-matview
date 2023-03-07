@@ -2,8 +2,6 @@
 
 ## What is this?
 
-**NB. This extension is currently WIP.**
-
 This is an extension for [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) which visualizes model's matrix.
 
 ## Example
