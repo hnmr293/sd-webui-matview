@@ -38,10 +38,14 @@ def list_models():
 
 def retrieve_weights(
     state_dict: Dict[str,Tensor],
+    lora_matmul: bool = False,
     filter: Union[Callable[[Layer],bool],None] = None
 ):
     target_layers: List[Layer] = []
+    
     alphas: Dict[str,float] = dict()
+    lora_up: Dict[str,Layer] = dict()
+    lora_down: Dict[str, Layer] = dict()
     
     LT = LayerType
     
@@ -150,6 +154,12 @@ def retrieve_weights(
             continue
         
         layer = Layer(key, short_name, o_key, layers, layer_type, tensor, None)
+        
+        if 'lora_up' in layers:
+            lora_up[short_name[:-len('.lora_up')]] = layer
+        if 'lora_down' in layers:
+            lora_down[short_name[:-len('.lora_down')]] = layer
+        
         if filter is None or filter(layer):
             target_layers.append(layer)
     
@@ -164,6 +174,27 @@ def retrieve_weights(
         assert name in alphas, f'{name} not found in {list(alphas.keys())}'
         alpha = alphas[name]
         layer.lora_alpha = alpha
+        
+    if lora_matmul:
+        for lora in lora_up.keys():
+            up = lora_up[lora]
+            down = lora_down[lora]
+            up_v = up.value.squeeze().float()
+            down_v = down.value.squeeze().float()
+            if up_v.dim() != 2 or down_v.dim() != 2:
+                continue
+            dw_tensor = up_v.float() @ down_v.float()
+            layer = Layer(
+                lora + '.lora_matmul',
+                up.short_name.replace('.lora_up', '.lora_matmul'),
+                up.original_name.replace('.lora_up', '.lora_matmul'),
+                up.names[:-1] + ['lora_matmul'],
+                (up.type ^ LT.LoraUp) | LT.LoraMatMul,
+                dw_tensor,
+                up.lora_alpha,
+            )
+            if filter is None or filter(layer):
+                target_layers.append(layer)
     
     target_layers = sorted(target_layers, key=lambda x: tuple(map(try_to_int, x.names)))
     
@@ -174,13 +205,14 @@ def retrieve_weights(
 
 def repr_values(
     state_dict: Dict[str,Tensor],
+    lora_matmul: bool = False,
     filter: Union[Callable[[Layer],bool],None] = None,
     **kwargs
 ) -> Dict[str,Dict[str,Any]]:
     
     result: Dict[str,Dict[str,Any]] = dict()
     
-    layers = retrieve_weights(state_dict, filter=filter)
+    layers = retrieve_weights(state_dict, lora_matmul=lora_matmul, filter=filter)
     
     with tqdm(layers) as tq:
         for layer in tq:
@@ -254,6 +286,7 @@ def retrieve_weights2(
     rt = LT.NONE
     if 'up' in lora:   rt |= LT.LoraUp
     if 'down' in lora: rt |= LT.LoraDown
+    if 'ΔW' in lora:   rt |= LT.LoraMatMul
     
     def filter(layer: Layer) -> bool:
         #if layer.type & LT.UNet:
@@ -270,5 +303,11 @@ def retrieve_weights2(
     if 'Frobenius' in value: kwargs['fro'] = True
     if 'Histogram' in value: kwargs['values'] = True
     
-    result = repr_values(load_model(model_name, lora=is_lora), filter=filter, **kwargs)
+    result = repr_values(
+        load_model(model_name, lora=is_lora),
+        lora_matmul='ΔW' in lora,
+        filter=filter,
+        **kwargs
+    )
+    
     return result

@@ -13,9 +13,9 @@ class Weights:
         self.weights = weights
         self.is_lora = is_lora
         if self.is_lora:
-            self.up, self.down = self.split_lora(self.weights)
+            self.up, self.down, self.matmul = self.split_lora(self.weights)
         else:
-            self.up = self.down = self.weights
+            self.up = self.down = self.matmul =  self.weights
     
     def keys(self):
         return self.weights.keys()
@@ -32,7 +32,8 @@ class Weights:
     def draw_mean(self, fig: go.Figure, **kwargs):
         if self.is_lora:
             draw_mean(fig, self.up, name='Mean (lora_up)', hsv=(0.95,0.5,1.0), mark='triangle-up', **kwargs)
-            draw_mean(fig, self.down, name='Mean (lora_down)', hsv=(0.9,0.5,1.0), mark='triangle-down', **kwargs)
+            draw_mean(fig, self.down, name='Mean (lora_down)', hsv=(0.90,0.5,1.0), mark='triangle-down', **kwargs)
+            draw_mean(fig, self.matmul, name='Mean (lora_ΔW)', hsv=(0.85,0.5,1.0), mark='square', **kwargs)
         else:
             draw_mean(fig, self.weights, hsv=(0.0,0.5,1.0), **kwargs)
     
@@ -40,19 +41,22 @@ class Weights:
         if self.is_lora:
             draw_hist(fig, self.up, hmin, hmax, name='Hist. (lora_up)', **kwargs)
             draw_hist(fig, self.down, hmin, hmax, name='Hist. (lora_down)', **kwargs)
+            draw_hist(fig, self.matmul, hmin, hmax, name='Hist. (lora_ΔW)', **kwargs)
         else:
             draw_hist(fig, self.weights, hmin, hmax, **kwargs)
     
     def draw_fro(self, fig: go.Figure, **kwargs):
         if self.is_lora:
             draw_fro(fig, self.up, name='Frobenius (lora_up)', hsv=(2/3+0.05,0.5,1.0), mark='triangle-up', **kwargs)
-            draw_fro(fig, self.down, name='Frobenius (lora_down)', hsv=(2/3+0.1,0.5,1.0), mark='triangle-down', **kwargs)
+            draw_fro(fig, self.down, name='Frobenius (lora_down)', hsv=(2/3+0.10,0.5,1.0), mark='triangle-down', **kwargs)
+            draw_fro(fig, self.matmul, name='Frobenius (lora_ΔW)', hsv=(2/3+0.15,0.5,1.0), mark='square', **kwargs)
         else:
             draw_fro(fig, self.weights, hsv=(2/3,0.5,1.0), **kwargs)
     
     def split_lora(self, weights: Dict[str, Dict[str, Any]]):
         up: Dict[str, Dict[str, Any]] = dict()
         down: Dict[str, Dict[str, Any]] = dict()
+        matmul: Dict[str, Dict[str, Any]] = dict()
         
         for longname, obj in weights.items():
             layer = obj['layer']
@@ -62,8 +66,11 @@ class Weights:
             elif layer.short_name.endswith('.lora_down'):
                 layer.short_name = layer.short_name[:-len('.lora_down')]
                 down[longname] = obj
+            elif layer.short_name.endswith('.lora_matmul'):
+                layer.short_name = layer.short_name[:-len('.lora_matmul')]
+                matmul[longname] = obj
         
-        return up, down
+        return up, down, matmul
 
     
 def draw_mean(

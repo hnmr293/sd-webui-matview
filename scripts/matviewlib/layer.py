@@ -31,6 +31,7 @@ class LayerType(Flag):
     # LoRA
     LoraUp = auto()
     LoraDown = auto()
+    LoraMatMul = auto()
     
     # currently not used
     Other = auto()

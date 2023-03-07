@@ -196,7 +196,7 @@ def add_tab():
                     network = gr.CheckboxGroup(choices=['Text encoder', 'VAE', 'U-Net'], value=['U-Net'], label='Network')
                     layer_type = gr.CheckboxGroup(choices=['Linear', 'Conv', 'SAttn', 'XAttn', 'Norm'], value=['SAttn', 'XAttn'], label='Layer Type')
                     attn_type = gr.CheckboxGroup(choices=['Q', 'K', 'V', 'Out'], value=['Q', 'K', 'V'], label='Attentions')
-                    lora_type = gr.CheckboxGroup(choices=['up', 'down'], value=['up', 'down'], label='LoRA')
+                    lora_type = gr.CheckboxGroup(choices=['up', 'down', 'ΔW'], value=['up', 'down'], label='LoRA')
                 value_type = gr.CheckboxGroup(choices=['Mean', 'Frobenius', 'Histogram'], value=['Mean'], label='Value')
                 #with gr.Row():
                 #    csv = gr.Button('Download CSV')
