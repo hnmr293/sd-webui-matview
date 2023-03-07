@@ -43,9 +43,11 @@ class LayerType(Flag):
 class Layer:
     name: str
     short_name: str
+    original_name: str
     names: List[str]
     type: LayerType
     value: Tensor
+    lora_alpha: Union[float,None]
 
 def match_op(table: Dict[Union[str,Tuple[str,...]],LayerType], layers):
     ty = LayerType.NONE

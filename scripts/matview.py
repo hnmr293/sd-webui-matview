@@ -5,22 +5,20 @@ ensure_install('plotly')
 #ensure_install('pandas')
 # =======================================================================================
 
+import sys
+import traceback
 from typing import Union, List, Dict, Any
-import colorsys
-from math import isinf
 
-import torch
-from torch import Tensor
-import torch.nn.functional as F
 import gradio as gr
 import plotly.graph_objects as go
 
-from modules import script_callbacks, sd_models
+from modules import script_callbacks
 from modules.ui_components import ToolButton
 
 #from scripts.tempcsv import csv_write
 from scripts.matviewlib.lora import available_loras, reload_loras
 from scripts.matviewlib.model import reload_models, retrieve_weights2, list_models
+from scripts.matviewlib.weights import Weights
 
 # =======================================================================================
 
@@ -32,117 +30,33 @@ def id(s: str):
 
 def build_graph(
     fig: go.Figure,
-    result: Dict[str,Dict[str,Any]],
+    weights: Weights,
     width: float,
     height: float,
     hmin: float,
     hmax: float,
-    value: List[str]
+    value: List[str],
+    **kwargs
 ):
     
     fro_is_right = 'Mean' in value or 'Histogram' in value
     
     if 'Mean' in value:
-        x = list(range(len(result)))
-        y = [v['mean'] for v in result.values()]
-        
-        fig.add_trace(
-            go.Scatter(
-                x=x, y=y, mode='lines+markers', name='Mean',
-                yaxis='y',
-                marker=dict(
-                    size=6,
-                    symbol='circle',
-                    color='rgba(0,0,0,0)',
-                    line=dict(
-                        color='rgba(255,128,128,1)',
-                        width=1,
-                    ),
-                ),
-                line=dict(
-                    color='rgba(255,128,128,0.5)',
-                    width=2,
-                ),
-                hoverlabel=dict(bgcolor='rgba(255,214,214,0.8)'),
-            )
+        weights.draw_mean(
+            fig,
+            yaxis='y',
         )
     
     if 'Histogram' in value:
-        # retrieve min/max value
-        if isinf(hmin) or isinf(hmax):
-            c_min = float('inf')
-            c_max = -float('inf')
-            for vs in (v['values'] for v in result.values()):
-                v_min = torch.min(vs).item()
-                v_max = torch.max(vs).item()
-                if v_min < c_min: c_min = v_min
-                if c_max < v_max: c_max = v_max
-            if isinf(hmin): hmin = c_min
-            if isinf(hmax): hmax = c_max
+        weights.draw_hist(
+            fig, hmin=hmin, hmax=hmax,
+            yaxis='y',
+        )
         
-        hmin, hmax = min(hmin, hmax), max(hmin, hmax)
-        RANGE = (hmin, hmax)
-        BINS = 500
-        HEIGHT = 2.0
-        for x0, rs in enumerate(result.values()):
-            vs: Tensor = rs['values']
-            n = torch.numel(vs)
-            hist, edges = torch.histogram(vs.float(), BINS, range=RANGE, density=False)
-            #small = torch.sum(vs < RANGE[0]) / n
-            #large = torch.sum(RANGE[1] < vs) / n
-            yvals = F.avg_pool1d(edges.unsqueeze(0), kernel_size=2, stride=1).squeeze()
-            assert tuple(yvals.shape) == (BINS,), tuple(yvals.shape)
-            xvals = x0 + hist / torch.max(hist) * HEIGHT
-            
-            r, g, b = colorsys.hls_to_rgb(x0/len(result)/-3, 0.5, 1.0)
-            r, g, b = int(r*255), int(g*255), int(b*255)
-            fig.add_trace(
-                go.Scatter(
-                    x=xvals, y=yvals, mode='lines', name='Hist.',
-                    yaxis='y', showlegend=False,
-                    line=dict(
-                        color=f'rgba({r},{g},{b},0.25)',
-                        width=1,
-                    ),
-                    hoverlabel=dict(bgcolor='rgba(0,0,0,0.8)'),
-                    hovertemplate=f'{rs["layer"].short_name}<br>%{{y:.3e}}<br>%{{customdata[0]:.3f}}',
-                    customdata=(hist / torch.sum(hist)).unsqueeze(1),
-                )
-            )
-            
-            # fill
-            fig.add_trace(
-                go.Scatter(
-                    x=[x0] * len(xvals), y=yvals, mode='lines',
-                    yaxis='y', showlegend=False,
-                    fill='tonextx', fillcolor=f'rgba({r},{g},{b},0.125)',
-                    line=dict(width=0),
-                    hoverinfo='none',
-                )
-            )
-    
     if 'Frobenius' in value:
-        x = list(range(len(result)))
-        y = [v['fro'] for v in result.values()]
-        fig.add_trace(
-            go.Scatter(
-                x=x, y=y, mode='lines+markers', name='Frobenius',
-                yaxis=['y', 'y2'][fro_is_right],
-                marker=dict(
-                    size=6,
-                    symbol='circle',
-                    color='rgba(0,0,0,0)',
-                    line=dict(
-                        color='rgba(128,128,255,1)',
-                        width=1,
-                    ),
-                ),
-                line=dict(
-                    color='rgba(128,128,255,0.5)',
-                    width=2,
-                ),
-                hoverlabel=dict(bgcolor='rgba(214,214,255,0.8)'),
-            )
+        weights.draw_fro(
+            fig,
+            yaxis=['y', 'y2'][fro_is_right],
         )
     
     if fro_is_right:
@@ -153,7 +67,7 @@ def build_graph(
         y2_title = ''
     
     x_title = 'layer'
-    x_ticks = [v['layer'].short_name for v in result.values()]
+    x_ticks = [v['layer'].short_name for v in weights.values()]
     
     fig.update_layout(
         autosize=False,
@@ -163,7 +77,7 @@ def build_graph(
         xaxis=dict(
             title=x_title,
             tickmode='array',
-            tickvals=list(range(len(result))),
+            tickvals=list(range(len(weights))),
             ticktext=x_ticks,
         ),
         yaxis=dict(
@@ -208,14 +122,16 @@ def show(
     # 1. retrieve tensor statistics
     
     if model_name is not None and len(model_name) != 0:
-        result = retrieve_weights2(model_name, False, wb, network, layer, attn, lora, value)
+        v = retrieve_weights2(model_name, False, wb, network, layer, attn, lora, value)
+        result = Weights(v, False)
     else:
         result = None
     
     if lora_name is not None and len(lora_name) != 0:
-        result2 = retrieve_weights2(lora_name, True, wb, network, layer, attn, lora, value)
+        v = retrieve_weights2(lora_name, True, wb, network, layer, attn, lora, value)
+        result_lora = Weights(v, True)
     else:
-        result2 = None
+        result_lora = None
     
     # 2. build graph
     
@@ -224,8 +140,8 @@ def show(
     if result is not None:
         build_graph(fig, result, width, height, hmin, hmax, value)
     
-    if result2 is not None:
-        build_graph(fig, result2, width, height, hmin, hmax, value)
+    if result_lora is not None:
+        build_graph(fig, result_lora, width, height, hmin, hmax, value)
     
     return fig
 
@@ -252,7 +168,8 @@ def add_tab():
             try:
                 v = fn(*args, **kwargs)
             except Exception as ex:
-                e = str(ex)
+                e = traceback.format_exc()
+                print(e, file=sys.stderr)
             return [v, e]
         return f
     

@@ -41,16 +41,15 @@ def retrieve_weights(
     filter: Union[Callable[[Layer],bool],None] = None
 ):
     target_layers: List[Layer] = []
+    alphas: Dict[str,float] = dict()
     
     LT = LayerType
     
-    #import pdb; pdb.set_trace()
-    for key in state_dict.keys(): # type: ignore
+    for o_key in state_dict.keys(): # type: ignore
+        key = o_key
         tensor: Tensor = state_dict[key] # type: ignore
         
         if key.startswith('lora_'):
-            if key.endswith('.alpha'):
-                continue
             key = lora2sd(key)
         
         layers = key.split('.') # type: ignore
@@ -145,9 +144,26 @@ def retrieve_weights(
         if short_name.endswith('.bias'):
             short_name = short_name[:-len('.bias')]
         
-        layer = Layer(key, short_name, layers, layer_type, tensor)
+        if short_name.endswith('.alpha'):
+            assert tuple(tensor.shape) == (), tuple(tensor.shape)
+            alphas[short_name[:-len('.alpha')]] = tensor.item()
+            continue
+        
+        layer = Layer(key, short_name, o_key, layers, layer_type, tensor, None)
         if filter is None or filter(layer):
             target_layers.append(layer)
+    
+    for layer in target_layers:
+        if layer.short_name.endswith('.lora_up'):
+            s = '.lora_up'
+        if layer.short_name.endswith('.lora_down'):
+            s = '.lora_down'
+        else:
+            continue
+        name = layer.short_name[:-len(s)]
+        assert name in alphas, f'{name} not found in {list(alphas.keys())}'
+        alpha = alphas[name]
+        layer.lora_alpha = alpha
     
     target_layers = sorted(target_layers, key=lambda x: tuple(map(try_to_int, x.names)))
     
