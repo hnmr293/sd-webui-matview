@@ -35,15 +35,15 @@ class Weights:
             draw_mean(fig, self.down, name='Mean (lora_down)', hsv=(0.90,0.5,1.0), mark='triangle-down', **kwargs)
             draw_mean(fig, self.matmul, name='Mean (lora_ΔW)', hsv=(0.85,0.5,1.0), mark='square', **kwargs)
         else:
-            draw_mean(fig, self.weights, hsv=(0.0,0.5,1.0), **kwargs)
+            draw_mean(fig, self.weights, name='Mean (model)', hsv=(0.0,0.5,1.0), **kwargs)
     
-    def draw_hist(self, fig: go.Figure, hmin: float, hmax: float, **kwargs):
+    def draw_hist(self, fig: go.Figure, hmin: float, hmax: float, height: float = 2.0, **kwargs):
         if self.is_lora:
-            draw_hist(fig, self.up, hmin, hmax, name='Hist. (lora_up)', **kwargs)
-            draw_hist(fig, self.down, hmin, hmax, name='Hist. (lora_down)', **kwargs)
-            draw_hist(fig, self.matmul, hmin, hmax, name='Hist. (lora_ΔW)', **kwargs)
+            draw_hist(fig, self.up, hmin, hmax, name='Hist. (lora_up)', h_shift=0.1, height=height, **kwargs)
+            draw_hist(fig, self.down, hmin, hmax, name='Hist. (lora_down)', h_shift=0.1, height=height, **kwargs)
+            draw_hist(fig, self.matmul, hmin, hmax, name='Hist. (lora_ΔW)', h_shift=0.1, height=height, **kwargs)
         else:
-            draw_hist(fig, self.weights, hmin, hmax, **kwargs)
+            draw_hist(fig, self.weights, hmin, hmax, name='Hist. (model)', height=height, **kwargs)
     
     def draw_fro(self, fig: go.Figure, **kwargs):
         if self.is_lora:
@@ -51,7 +51,7 @@ class Weights:
             draw_fro(fig, self.down, name='Frobenius (lora_down)', hsv=(2/3+0.10,0.5,1.0), mark='triangle-down', **kwargs)
             draw_fro(fig, self.matmul, name='Frobenius (lora_ΔW)', hsv=(2/3+0.15,0.5,1.0), mark='square', **kwargs)
         else:
-            draw_fro(fig, self.weights, hsv=(2/3,0.5,1.0), **kwargs)
+            draw_fro(fig, self.weights, name='Frobenius (model)', hsv=(2/3,0.5,1.0), **kwargs)
     
     def split_lora(self, weights: Dict[str, Dict[str, Any]]):
         up: Dict[str, Dict[str, Any]] = dict()
@@ -112,7 +112,7 @@ def draw_mean(
     fig.add_trace(go.Scatter(**args))
 
 
-def draw_hist(fig: go.Figure, weights: Dict[str, Dict[str, Any]], hmin: float, hmax: float, **kwargs):
+def draw_hist(fig: go.Figure, weights: Dict[str, Dict[str, Any]], hmin: float, hmax: float, h_shift: float = 0.0, height: float = 2.0, **kwargs):
     # retrieve min/max value
     if isinf(hmin) or isinf(hmax):
         c_min = float('inf')
@@ -128,7 +128,7 @@ def draw_hist(fig: go.Figure, weights: Dict[str, Dict[str, Any]], hmin: float, h
     hmin, hmax = min(hmin, hmax), max(hmin, hmax)
     RANGE = (hmin, hmax)
     BINS = 500
-    HEIGHT = 2.0
+    HEIGHT = height
     for x0, rs in enumerate(weights.values()):
         vs: Tensor = rs['values']
         #n = torch.numel(vs)
@@ -139,7 +139,9 @@ def draw_hist(fig: go.Figure, weights: Dict[str, Dict[str, Any]], hmin: float, h
         assert tuple(yvals.shape) == (BINS,), tuple(yvals.shape)
         xvals = x0 + hist / torch.max(hist) * HEIGHT
         
-        r, g, b = colorsys.hls_to_rgb(x0/len(weights)/-3, 0.5, 1.0)
+        h, s, v = x0/len(weights)/-3, 0.5, 1.0
+        h += h_shift
+        r, g, b = colorsys.hls_to_rgb(h, s, v)
         r, g, b = int(r*255), int(g*255), int(b*255)
         
         default_args = dict(

@@ -13,7 +13,8 @@ from scripts.matviewlib.utils import try_to_int
 
 def reload_models():
     sd_models.list_models()
-    return gr.update(choices=list_models())
+    models = list_models()
+    return [gr.update(choices=models), gr.update(choices=models)]
 
 def load_model(
     model_name: Union[str,None],

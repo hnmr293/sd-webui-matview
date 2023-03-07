@@ -35,6 +35,7 @@ def build_graph(
     height: float,
     hmin: float,
     hmax: float,
+    hist_height: float,
     value: List[str],
     **kwargs
 ):
@@ -49,7 +50,7 @@ def build_graph(
     
     if 'Histogram' in value:
         weights.draw_hist(
-            fig, hmin=hmin, hmax=hmax,
+            fig, hmin=hmin, hmax=hmax, height=hist_height,
             yaxis='y',
         )
         
@@ -97,12 +98,15 @@ def build_graph(
 
 
 def show(
-    model_name: Union[str,None],
-    lora_name: Union[str,None],
+    model_A: Union[str,None],
+    model_B: Union[str,None],
+    lora_A: Union[str,None],
+    lora_B: Union[str,None],
     width: float,
     height: float,
     hmin: Union[str,float],
     hmax: Union[str,float],
+    hist_height: Union[int,float],
     wb: List[str],
     network: List[str],
     layer: List[str],
@@ -121,27 +125,28 @@ def show(
     
     # 1. retrieve tensor statistics
     
-    if model_name is not None and len(model_name) != 0:
-        v = retrieve_weights2(model_name, False, wb, network, layer, attn, lora, value)
+    if model_A is not None and len(model_A) != 0:
+        v = retrieve_weights2(model_A, False, wb, network, layer, attn, lora, value)
         result = Weights(v, False)
     else:
         result = None
     
-    if lora_name is not None and len(lora_name) != 0:
-        v = retrieve_weights2(lora_name, True, wb, network, layer, attn, lora, value)
+    if lora_A is not None and len(lora_A) != 0:
+        v = retrieve_weights2(lora_A, True, wb, network, layer, attn, lora, value)
         result_lora = Weights(v, True)
     else:
         result_lora = None
     
     # 2. build graph
     
+    hist_height = float(hist_height)
     fig = go.Figure()
     
     if result is not None:
-        build_graph(fig, result, width, height, hmin, hmax, value)
+        build_graph(fig, result, width, height, hmin, hmax, hist_height, value)
     
     if result_lora is not None:
-        build_graph(fig, result_lora, width, height, hmin, hmax, value)
+        build_graph(fig, result_lora, width, height, hmin, hmax, hist_height, value)
     
     return fig
 
@@ -170,17 +175,24 @@ def add_tab():
             except Exception as ex:
                 e = traceback.format_exc()
                 print(e, file=sys.stderr)
-            return [v, e]
+            if isinstance(v, list):
+                return [*v, e]
+            else:
+                return [v, e]
         return f
     
     with gr.Blocks(analytics_enabled=False) as ui:
         with gr.Row():
             with gr.Column():
                 with gr.Row():
-                    models = gr.Dropdown(list_models(), elem_id=id('models'), label='Model')
+                    all_models = list_models()
+                    model_A = gr.Dropdown(all_models, label='Model A')
+                    model_B = gr.Dropdown(all_models, label='Model B', visible=False)
                     refresh = ToolButton(value='\U0001f504', elem_id=id('reload_model'))
                 with gr.Row():
-                    loras = gr.Dropdown(available_loras(), label='Lora')
+                    all_loras = available_loras()
+                    lora_A = gr.Dropdown(all_loras, label='Lora A')
+                    lora_B = gr.Dropdown(all_loras, label='Lora B', visible=False)
                     refresh_loras = ToolButton(value='\U0001f504')
                 with gr.Accordion('Graph Settings', open=False):
                     with gr.Row():
@@ -189,6 +201,7 @@ def add_tab():
                     with gr.Row():
                         min = gr.Textbox(value='-0.5', label='Hist. Min')
                         max = gr.Textbox(value='0.5', label='Hist. Max')
+                        hist_height = gr.Slider(minimum=1, maximum=5, value=2, step=0.05, label='Hist. Height')
                 run = gr.Button('Show', variant="primary")
             with gr.Column():
                 with gr.Row():
@@ -209,9 +222,9 @@ def add_tab():
         with gr.Group(visible=False):
             pass
     
-        refresh.click(fn=wrap(reload_models), inputs=[], outputs=[models, err])
-        refresh_loras.click(fn=wrap(reload_loras), inputs=[], outputs=[loras, err])
-        run.click(fn=wrap(show), inputs=[models, loras, width, height, min, max, wb, network, layer_type, attn_type, lora_type, value_type], outputs=[plot, err])
+        refresh.click(fn=wrap(reload_models), inputs=[], outputs=[model_A, model_B, err])
+        refresh_loras.click(fn=wrap(reload_loras), inputs=[], outputs=[lora_A, lora_B, err])
+        run.click(fn=wrap(show), inputs=[model_A, model_B, lora_A, lora_B, width, height, min, max, hist_height, wb, network, layer_type, attn_type, lora_type, value_type], outputs=[plot, err])
         #csv.click(fn=wrap(save_csv), inputs=[models, wb, network, layer_type, attn_type], outputs=[out, err])
     
     return [(ui, NAME, NAME.lower())]

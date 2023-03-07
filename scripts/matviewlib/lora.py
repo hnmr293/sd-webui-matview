@@ -1,6 +1,7 @@
 import os
 import re
 from modules import extensions, script_loading
+import gradio as gr
 
 try:
     _lora_ext = next(ex for ex in extensions.active() if ex.name == 'Lora')
@@ -14,7 +15,8 @@ def reload_loras():
     if _lora_mod is None:
         raise ValueError('Lora is inactive. See `Extensions` tab.')
     _lora_mod.list_available_loras()
-    return list(_lora_mod.available_loras.keys())
+    loras = [''] + list(_lora_mod.available_loras.keys())
+    return [gr.update(choices=loras), gr.update(choices=loras)]
 
 def available_loras():
     return (
