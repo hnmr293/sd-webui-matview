@@ -159,6 +159,9 @@ def draw_hist(fig: go.Figure, weights: Dict[str, Dict[str, Any]], hmin: float, h
             customdata=(hist / torch.sum(hist)).unsqueeze(1),
         )
         
+        if 'name' in kwargs:
+            default_args['hovertemplate'] = kwargs['name'] + '<br>' + default_args['hovertemplate']
+        
         args = { **default_args, **kwargs }
         
         fig.add_trace(go.Scatter(**args))
