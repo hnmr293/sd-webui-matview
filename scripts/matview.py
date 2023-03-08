@@ -37,7 +37,6 @@ def build_graph(
     hmax: float,
     hist_height: float,
     value: List[str],
-    **kwargs
 ):
     
     fro_is_right = 'Mean' in value or 'Histogram' in value
@@ -46,18 +45,24 @@ def build_graph(
         weights.draw_mean(
             fig,
             yaxis='y',
+            hsv=(0.0, 0.5, 1.0),
         )
     
     if 'Histogram' in value:
+        hsv_0 = (0.0, 0.5, 1.0) if not weights.is_lora else (0.1, 0.5, 1.0)
+        hsv_1 = (hsv_0[0] - 1/3, hsv_0[1], hsv_0[2])
         weights.draw_hist(
             fig, hmin=hmin, hmax=hmax, height=hist_height,
             yaxis='y',
+            hsv_0=hsv_0,
+            hsv_1=hsv_1,
         )
         
     if 'Frobenius' in value:
         weights.draw_fro(
             fig,
             yaxis=['y', 'y2'][fro_is_right],
+            hsv=(2/3, 0.5, 1.0),
         )
     
     if fro_is_right:
@@ -123,30 +128,20 @@ def show(
     else:
         hmax = float(hmax)
     
-    # 1. retrieve tensor statistics
-    
-    if model_A is not None and len(model_A) != 0:
-        v = retrieve_weights2(model_A, False, wb, network, layer, attn, lora, value)
-        result = Weights(v, False)
-    else:
-        result = None
-    
-    if lora_A is not None and len(lora_A) != 0:
-        v = retrieve_weights2(lora_A, True, wb, network, layer, attn, lora, value)
-        result_lora = Weights(v, True)
-    else:
-        result_lora = None
-    
-    # 2. build graph
-    
     hist_height = float(hist_height)
+    
     fig = go.Figure()
     
-    if result is not None:
-        build_graph(fig, result, width, height, hmin, hmax, hist_height, value)
+    def draw(model: Union[str,None], is_lora: bool, *args, **kwargs):
+        if model is not None and len(model) != 0:
+            # 1. retrieve tensor statistics
+            v = retrieve_weights2(model, is_lora, *args, **kwargs)
+            w = Weights(v, is_lora)
+            # 2. build graph
+            build_graph(fig, w, width, height, hmin, hmax, hist_height, value)
     
-    if result_lora is not None:
-        build_graph(fig, result_lora, width, height, hmin, hmax, hist_height, value)
+    draw(model_A, False, wb, network, layer, attn, lora, value)
+    draw(lora_A, True, wb, network, layer, attn, lora, value)
     
     return fig
 
@@ -201,7 +196,7 @@ def add_tab():
                     with gr.Row():
                         min = gr.Textbox(value='-0.5', label='Hist. Min')
                         max = gr.Textbox(value='0.5', label='Hist. Max')
-                        hist_height = gr.Slider(minimum=1, maximum=5, value=2, step=0.05, label='Hist. Height')
+                        hist_height = gr.Slider(minimum=0.05, maximum=5, value=1, step=0.05, label='Hist. Height')
                 run = gr.Button('Show', variant="primary")
             with gr.Column():
                 with gr.Row():
