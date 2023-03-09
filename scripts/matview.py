@@ -7,7 +7,8 @@ ensure_install('plotly')
 
 import sys
 import traceback
-from typing import Union, List, Dict, Any
+from dataclasses import dataclass
+from typing import Union, List, Dict, Any, Tuple
 
 import gradio as gr
 import plotly.graph_objects as go
@@ -28,6 +29,36 @@ def id(s: str):
     return f'{NAME.lower()}-{s}'
 
 
+@dataclass
+class GraphColors:
+    mean:       Tuple[float,float,float] = (0.0, 0.5, 1.0)
+    hist_start: Tuple[float,float,float] = (0.0, 0.5, 1.0)
+    hist_end:   Tuple[float,float,float] = (-1/3, 0.5, 1.0)
+    fro:        Tuple[float,float,float] = (2/3, 0.5, 1.0)
+    
+    def shift(self, h_shift_mean: float, h_shift_hist: float, h_shift_fro: float):
+        self.shift_mean(h_shift_mean)
+        self.shift_hist(h_shift_hist)
+        self.shift_fro(h_shift_fro)
+        return self
+    
+    def shift_all(self, h_shift: float):
+        return self.shift(h_shift, h_shift, h_shift)
+    
+    def shift_mean(self, h_shift):
+        self.mean = (self.mean[0]+h_shift, self.mean[1], self.mean[2])
+        return self
+    
+    def shift_hist(self, h_shift):
+        self.hist_start = (self.hist_start[0]+h_shift, self.hist_start[1], self.hist_start[2])
+        self.hist_end   = (self.hist_end[0]+h_shift,   self.hist_end[1],   self.hist_end[2])
+        return self
+
+    def shift_fro(self, h_shift):
+        self.fro = (self.fro[0]+h_shift, self.fro[1], self.fro[2])
+        return self
+    
+
 def build_graph(
     fig: go.Figure,
     weights: Weights,
@@ -37,6 +68,7 @@ def build_graph(
     hmax: float,
     hist_height: float,
     value: List[str],
+    colors: GraphColors,
 ):
     
     fro_is_right = 'Mean' in value or 'Histogram' in value
@@ -45,24 +77,22 @@ def build_graph(
         weights.draw_mean(
             fig,
             yaxis='y',
-            hsv=(0.0, 0.5, 1.0),
+            hsv=colors.mean,
         )
     
     if 'Histogram' in value:
-        hsv_0 = (0.0, 0.5, 1.0) if not weights.is_lora else (0.1, 0.5, 1.0)
-        hsv_1 = (hsv_0[0] - 1/3, hsv_0[1], hsv_0[2])
         weights.draw_hist(
             fig, hmin=hmin, hmax=hmax, height=hist_height,
             yaxis='y',
-            hsv_0=hsv_0,
-            hsv_1=hsv_1,
+            hsv_0=colors.hist_start,
+            hsv_1=colors.hist_end,
         )
         
     if 'Frobenius' in value:
         weights.draw_fro(
             fig,
             yaxis=['y', 'y2'][fro_is_right],
-            hsv=(2/3, 0.5, 1.0),
+            hsv=colors.fro,
         )
     
     if fro_is_right:
@@ -132,16 +162,18 @@ def show(
     
     fig = go.Figure()
     
-    def draw(model: Union[str,None], is_lora: bool, *args, **kwargs):
+    def draw(name: str, model: Union[str,None], is_lora: bool, colors: GraphColors):
         if model is not None and len(model) != 0:
             # 1. retrieve tensor statistics
-            v = retrieve_weights2(model, is_lora, *args, **kwargs)
-            w = Weights(v, is_lora)
+            v = retrieve_weights2(model, is_lora, wb, network, layer, attn, lora, value)
+            w = Weights(name, v, is_lora)
             # 2. build graph
-            build_graph(fig, w, width, height, hmin, hmax, hist_height, value)
+            build_graph(fig, w, width, height, hmin, hmax, hist_height, value, colors)
     
-    draw(model_A, False, wb, network, layer, attn, lora, value)
-    draw(lora_A, True, wb, network, layer, attn, lora, value)
+    draw('Model A', model_A, False, GraphColors())
+    draw('Model B', model_B, False, GraphColors().shift(-0.05, 0.0, -0.05))
+    draw('LoRA A', lora_A, True, GraphColors().shift_hist(0.1))
+    draw('LoRA B', lora_B, True, GraphColors().shift(0.1, 0.2, 0.1))
     
     return fig
 
@@ -182,12 +214,12 @@ def add_tab():
                 with gr.Row():
                     all_models = list_models()
                     model_A = gr.Dropdown(all_models, label='Model A')
-                    model_B = gr.Dropdown(all_models, label='Model B', visible=False)
+                    model_B = gr.Dropdown(all_models, label='Model B')
                     refresh = ToolButton(value='\U0001f504', elem_id=id('reload_model'))
                 with gr.Row():
                     all_loras = available_loras()
                     lora_A = gr.Dropdown(all_loras, label='Lora A')
-                    lora_B = gr.Dropdown(all_loras, label='Lora B', visible=False)
+                    lora_B = gr.Dropdown(all_loras, label='Lora B')
                     refresh_loras = ToolButton(value='\U0001f504')
                 with gr.Accordion('Graph Settings', open=False):
                     with gr.Row():

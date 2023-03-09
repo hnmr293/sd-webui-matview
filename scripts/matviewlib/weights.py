@@ -24,7 +24,8 @@ class DrawContext(dict):
 
 class Weights:
     
-    def __init__(self, weights: Dict[str, Dict[str, Any]], is_lora: bool):
+    def __init__(self, model_name: str, weights: Dict[str, Dict[str, Any]], is_lora: bool):
+        self.name = model_name
         self.weights = weights
         self.is_lora = is_lora
         if self.is_lora:
@@ -47,28 +48,28 @@ class Weights:
     def draw_mean(self, fig: go.Figure, hsv: Tuple[float,float,float], **kwargs):
         if self.is_lora:
             h, s, v = hsv
-            draw_mean(fig, self.up, name='Mean (lora_up)',     hsv=((h-0.05)%1,s,v), marker=dict(symbol='triangle-up'), **kwargs)
-            draw_mean(fig, self.down, name='Mean (lora_down)', hsv=((h-0.10)%1,s,v), marker=dict(symbol='triangle-down'), **kwargs)
-            draw_mean(fig, self.matmul, name='Mean (lora_ΔW)', hsv=((h-0.15)%1,s,v), marker=dict(symbol='square'), **kwargs)
+            draw_mean(self.name, fig, self.up, name='Mean (lora_up)',     hsv=((h-0.05)%1,s,v), marker=dict(symbol='triangle-up'), **kwargs)
+            draw_mean(self.name, fig, self.down, name='Mean (lora_down)', hsv=((h-0.10)%1,s,v), marker=dict(symbol='triangle-down'), **kwargs)
+            draw_mean(self.name, fig, self.matmul, name='Mean (lora_ΔW)', hsv=((h-0.15)%1,s,v), marker=dict(symbol='square'), **kwargs)
         else:
-            draw_mean(fig, self.weights, name='Mean (model)',  hsv=hsv, marker=dict(symbol='circle'), **kwargs)
+            draw_mean(self.name, fig, self.weights, name=f'Mean ({self.name})',  hsv=hsv, marker=dict(symbol='circle'), **kwargs)
     
     def draw_hist(self, fig: go.Figure, hmin: float, hmax: float, height: float, hsv_0: Tuple[float,float,float], hsv_1: Tuple[float,float,float], **kwargs):
         if self.is_lora:
-            draw_hist(fig, self.up, hmin, hmax, name='Hist. (lora_up)',     height=height, hsv_0=hsv_0, hsv_1=hsv_1, **kwargs)
-            draw_hist(fig, self.down, hmin, hmax, name='Hist. (lora_down)', height=height, hsv_0=hsv_0, hsv_1=hsv_1, **kwargs)
-            draw_hist(fig, self.matmul, hmin, hmax, name='Hist. (lora_ΔW)', height=height, hsv_0=hsv_0, hsv_1=hsv_1, **kwargs)
+            draw_hist(self.name, fig, self.up, hmin, hmax, name='Hist. (lora_up)',     height=height, hsv_0=hsv_0, hsv_1=hsv_1, **kwargs)
+            draw_hist(self.name, fig, self.down, hmin, hmax, name='Hist. (lora_down)', height=height, hsv_0=hsv_0, hsv_1=hsv_1, **kwargs)
+            draw_hist(self.name, fig, self.matmul, hmin, hmax, name='Hist. (lora_ΔW)', height=height, hsv_0=hsv_0, hsv_1=hsv_1, **kwargs)
         else:
-            draw_hist(fig, self.weights, hmin, hmax, name='Hist. (model)',  height=height, hsv_0=hsv_0, hsv_1=hsv_1, **kwargs)
+            draw_hist(self.name, fig, self.weights, hmin, hmax, name=f'Hist. ({self.name})',  height=height, hsv_0=hsv_0, hsv_1=hsv_1, **kwargs)
     
     def draw_fro(self, fig: go.Figure, hsv: Tuple[float,float,float], **kwargs):
         if self.is_lora:
             h, s, v = hsv
-            draw_fro(fig, self.up, name='Frobenius (lora_up)',     hsv=(h+0.05,s,v), marker=dict(symbol='triangle-up'), **kwargs)
-            draw_fro(fig, self.down, name='Frobenius (lora_down)', hsv=(h+0.10,s,v), marker=dict(symbol='triangle-down'), **kwargs)
-            draw_fro(fig, self.matmul, name='Frobenius (lora_ΔW)', hsv=(h+0.15,s,v), marker=dict(symbol='square'), **kwargs)
+            draw_fro(self.name, fig, self.up, name='Frobenius (lora_up)',     hsv=(h+0.05,s,v), marker=dict(symbol='triangle-up'), **kwargs)
+            draw_fro(self.name, fig, self.down, name='Frobenius (lora_down)', hsv=(h+0.10,s,v), marker=dict(symbol='triangle-down'), **kwargs)
+            draw_fro(self.name, fig, self.matmul, name='Frobenius (lora_ΔW)', hsv=(h+0.15,s,v), marker=dict(symbol='square'), **kwargs)
         else:
-            draw_fro(fig, self.weights, name='Frobenius (model)',  hsv=hsv, marker=dict(symbol='circle'), **kwargs)
+            draw_fro(self.name, fig, self.weights, name=f'Frobenius ({self.name})',  hsv=hsv, marker=dict(symbol='circle'), **kwargs)
     
     def split_lora(self, weights: Dict[str, Dict[str, Any]]):
         up: Dict[str, Dict[str, Any]] = dict()
@@ -91,6 +92,7 @@ class Weights:
 
     
 def draw_mean(
+    series_name: str,
     fig: go.Figure,
     weights: Dict[str, Dict[str, Any]],
     hsv: Tuple[float,float,float] = (0.0,0.5,1.0),
@@ -121,6 +123,7 @@ def draw_mean(
             width=2,
         ),
         hoverlabel=dict(bgcolor=f'rgba({label_color},0.8)'),
+        hovertemplate=f'{series_name}<br>%{{x}}<br>%{{y:.3e}}',
     )
     
     args.update_context(**kwargs)
@@ -129,6 +132,7 @@ def draw_mean(
 
 
 def draw_hist(
+    series_name: str,
     fig: go.Figure,
     weights: Dict[str, Dict[str, Any]],
     hmin: float,
@@ -188,7 +192,7 @@ def draw_hist(
                 width=1,
             ),
             hoverlabel=dict(bgcolor='rgba(0,0,0,0.8)'),
-            hovertemplate=f'{rs["layer"].short_name}<br>%{{y:.3e}}<br>%{{customdata[0]:.3f}}',
+            hovertemplate=f'{series_name}<br>{rs["layer"].short_name}<br>%{{y:.3e}}<br>%{{customdata[0]:.3f}}',
             customdata=(hist / torch.sum(hist)).unsqueeze(1),
         )
         
@@ -218,6 +222,7 @@ def draw_hist(
 
 
 def draw_fro(
+    series_name: str,
     fig: go.Figure,
     weights: Dict[str, Dict[str, Any]],
     hsv: Tuple[float,float,float] = (2/3,0.5,1.0),
@@ -248,6 +253,7 @@ def draw_fro(
             width=2,
         ),
         hoverlabel=dict(bgcolor=f'rgba({label_color},0.8)'),
+        hovertemplate=f'{series_name}<br>%{{x}}<br>%{{y:.3e}}',
     )
     
     args.update_context(**kwargs)

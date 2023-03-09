@@ -167,13 +167,22 @@ def retrieve_weights(
     for layer in target_layers:
         if layer.short_name.endswith('.lora_up'):
             s = '.lora_up'
+            dim = layer.value.shape[1]
         if layer.short_name.endswith('.lora_down'):
             s = '.lora_down'
+            dim = layer.value.shape[0]
         else:
             continue
+        
         name = layer.short_name[:-len(s)]
-        assert name in alphas, f'{name} not found in {list(alphas.keys())}'
-        alpha = alphas[name]
+        
+        if len(alphas) == 0:
+            # old version LoRA
+            alpha = dim
+        else:
+            assert name in alphas, f'{name} not found in {list(alphas.keys())}'
+            alpha = alphas[name]
+        
         layer.lora_alpha = alpha
         
     if lora_matmul:
