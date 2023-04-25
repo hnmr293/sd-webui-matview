@@ -227,7 +227,7 @@ def repr_values(
     with tqdm(layers) as tq:
         for layer in tq:
             tq.set_postfix_str(layer.short_name)
-            tensor = layer.value
+            tensor = layer.value.float()
             
             out = dict()
             
