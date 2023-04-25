@@ -5,6 +5,7 @@ ensure_install('plotly')
 #ensure_install('pandas')
 # =======================================================================================
 
+import os
 import sys
 import traceback
 from dataclasses import dataclass
@@ -28,6 +29,14 @@ NAME = 'MatView'
 def id(s: str):
     return f'{NAME.lower()}-{s}'
 
+
+def get_dir_path():
+    if '__file__' in globals():
+        return os.path.dirname(__file__)
+    else:
+        # cf. https://stackoverflow.com/a/53293924
+        import inspect
+        return os.path.dirname(inspect.getfile(lambda: None))
 
 @dataclass
 class GraphColors:
@@ -178,20 +187,57 @@ def show(
     return fig
 
 
-#def save_csv(
-#    model_name,
-#    wb: List[str],
-#    network: List[str],
-#    layer: List[str],
-#    attn: List[str],
-#):
-#    # 1. retrieve tensor statistics
-#    result = retrieve_weights2(model_name, wb, network, layer, attn, ['Histogram'])
-#    
-#    # 2. save data
-#    with csv_write(close=False) as (csv, io):
-#        pass
-#    
+def export_csv(
+    model_A: Union[str,None],
+    model_B: Union[str,None],
+    lora_A: Union[str,None],
+    lora_B: Union[str,None],
+    width: float,
+    height: float,
+    hmin: Union[str,float],
+    hmax: Union[str,float],
+    hist_height: Union[int,float],
+    wb: List[str],
+    network: List[str],
+    layer: List[str],
+    attn: List[str],
+    lora: List[str],
+    value: List[str]
+):
+    from csv import writer as csv_writer
+    import tempfile
+    
+    io = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+    csv = csv_writer(io)
+    
+    # header
+    csv.writerow(['#', 'model name', 'layer name', 'value type', 'value'])
+    
+    def write(model: str, is_lora: bool, value_type: str):
+        # 1. retrieve tensor statistics
+        v = retrieve_weights2(model, is_lora, wb, network, layer, attn, lora, value)
+        # 2. build csv
+        for idx, val in enumerate(v.values()):
+            csv.writerow([idx, model, val['layer'].short_name, value_type, val[value_type]])
+    
+    def write_value_type(value_type: str):
+        if model_A is not None and model_A != '':
+            write(model_A, False, value_type)
+        if model_B is not None and model_B != '':
+            write(model_B, False, value_type)
+        if lora_A is not None and lora_A != '':
+            write(lora_A, True, value_type)
+        if lora_B is not None and lora_B != '':
+            write(lora_B, True, value_type)
+    
+    if 'Mean' in value:
+        write_value_type('mean')
+    if 'Frobenius' in value:
+        write_value_type('fro')
+    
+    io.flush()
+    return io.name
+
 
 def add_tab():
     def wrap(fn):
@@ -229,7 +275,20 @@ def add_tab():
                         min = gr.Textbox(value='-0.5', label='Hist. Min')
                         max = gr.Textbox(value='0.5', label='Hist. Max')
                         hist_height = gr.Slider(minimum=0.05, maximum=5, value=1, step=0.05, label='Hist. Height')
+                
                 run = gr.Button('Show', variant="primary")
+                
+                with gr.Row():
+                    csv = gr.Button('Export CSV')
+                    # If `value` is empty, `gradio.File` will occupy a verrrrry large region.
+                    # And if `value` is not an existed file, `gradio.File` throws error! >_<
+                    dummy = os.path.join(get_dir_path(), '..', 'dummy.csv')
+                    # I want to use `__file__`, but some platform such as colab does not define `__file__`.
+                    if not os.path.exists(dummy):
+                        # Okay, I give up.
+                        dummy = None
+                    exported_file = gr.File(label='CSV', interactive=False, value=dummy)
+            
             with gr.Column():
                 with gr.Row():
                     wb = gr.CheckboxGroup(choices=['Weight', 'Bias'], value=['Weight'], label='Weight and/or Bias')
@@ -238,9 +297,6 @@ def add_tab():
                     attn_type = gr.CheckboxGroup(choices=['Q', 'K', 'V', 'Out'], value=['Q', 'K', 'V'], label='Attentions')
                     lora_type = gr.CheckboxGroup(choices=['up', 'down', 'ΔW'], value=['up', 'down'], label='LoRA')
                 value_type = gr.CheckboxGroup(choices=['Mean', 'Frobenius', 'Histogram'], value=['Mean'], label='Value')
-                #with gr.Row():
-                #    csv = gr.Button('Download CSV')
-                #    out = gr.File()
         
         err = gr.HTML(elem_id='matview-error')
         
@@ -252,7 +308,7 @@ def add_tab():
         refresh.click(fn=wrap(reload_models), inputs=[], outputs=[model_A, model_B, err])
         refresh_loras.click(fn=wrap(reload_loras), inputs=[], outputs=[lora_A, lora_B, err])
         run.click(fn=wrap(show), inputs=[model_A, model_B, lora_A, lora_B, width, height, min, max, hist_height, wb, network, layer_type, attn_type, lora_type, value_type], outputs=[plot, err])
-        #csv.click(fn=wrap(save_csv), inputs=[models, wb, network, layer_type, attn_type], outputs=[out, err])
+        csv.click(fn=wrap(export_csv), inputs=[model_A, model_B, lora_A, lora_B, width, height, min, max, hist_height, wb, network, layer_type, attn_type, lora_type, value_type], outputs=[exported_file, err])
     
     return [(ui, NAME, NAME.lower())]
 
