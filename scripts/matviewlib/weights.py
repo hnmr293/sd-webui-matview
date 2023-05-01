@@ -45,31 +45,31 @@ class Weights:
     def __len__(self):
         return len(self.weights)
     
-    def draw_mean(self, fig: go.Figure, hsv: Tuple[float,float,float], **kwargs):
+    def draw_mean(self, fig: go.Figure, keys: Dict[str,List['Weights']], hsv: Tuple[float,float,float], **kwargs):
         if self.is_lora:
             h, s, v = hsv
-            draw_mean(self.name, fig, self.up, name='Mean (lora_up)',     hsv=((h-0.05)%1,s,v), marker=dict(symbol='triangle-up'), **kwargs)
-            draw_mean(self.name, fig, self.down, name='Mean (lora_down)', hsv=((h-0.10)%1,s,v), marker=dict(symbol='triangle-down'), **kwargs)
-            draw_mean(self.name, fig, self.matmul, name='Mean (lora_ΔW)', hsv=((h-0.15)%1,s,v), marker=dict(symbol='square'), **kwargs)
+            draw_mean(self.name, fig, keys, self.up, name='Mean (lora_up)',     hsv=((h-0.05)%1,s,v), marker=dict(symbol='triangle-up'), **kwargs)
+            draw_mean(self.name, fig, keys, self.down, name='Mean (lora_down)', hsv=((h-0.10)%1,s,v), marker=dict(symbol='triangle-down'), **kwargs)
+            draw_mean(self.name, fig, keys, self.matmul, name='Mean (lora_ΔW)', hsv=((h-0.15)%1,s,v), marker=dict(symbol='square'), **kwargs)
         else:
-            draw_mean(self.name, fig, self.weights, name=f'Mean ({self.name})',  hsv=hsv, marker=dict(symbol='circle'), **kwargs)
+            draw_mean(self.name, fig, keys, self.weights, name=f'Mean ({self.name})',  hsv=hsv, marker=dict(symbol='circle'), **kwargs)
     
-    def draw_hist(self, fig: go.Figure, hmin: float, hmax: float, height: float, hsv_0: Tuple[float,float,float], hsv_1: Tuple[float,float,float], **kwargs):
+    def draw_hist(self, fig: go.Figure, keys: Dict[str,List['Weights']], hmin: float, hmax: float, height: float, hsv_0: Tuple[float,float,float], hsv_1: Tuple[float,float,float], **kwargs):
         if self.is_lora:
-            draw_hist(self.name, fig, self.up, hmin, hmax, name='Hist. (lora_up)',     height=height, hsv_0=hsv_0, hsv_1=hsv_1, **kwargs)
-            draw_hist(self.name, fig, self.down, hmin, hmax, name='Hist. (lora_down)', height=height, hsv_0=hsv_0, hsv_1=hsv_1, **kwargs)
-            draw_hist(self.name, fig, self.matmul, hmin, hmax, name='Hist. (lora_ΔW)', height=height, hsv_0=hsv_0, hsv_1=hsv_1, **kwargs)
+            draw_hist(self.name, fig, keys, self.up, hmin, hmax, name='Hist. (lora_up)',     height=height, hsv_0=hsv_0, hsv_1=hsv_1, **kwargs)
+            draw_hist(self.name, fig, keys, self.down, hmin, hmax, name='Hist. (lora_down)', height=height, hsv_0=hsv_0, hsv_1=hsv_1, **kwargs)
+            draw_hist(self.name, fig, keys, self.matmul, hmin, hmax, name='Hist. (lora_ΔW)', height=height, hsv_0=hsv_0, hsv_1=hsv_1, **kwargs)
         else:
-            draw_hist(self.name, fig, self.weights, hmin, hmax, name=f'Hist. ({self.name})',  height=height, hsv_0=hsv_0, hsv_1=hsv_1, **kwargs)
+            draw_hist(self.name, fig, keys, self.weights, hmin, hmax, name=f'Hist. ({self.name})',  height=height, hsv_0=hsv_0, hsv_1=hsv_1, **kwargs)
     
-    def draw_fro(self, fig: go.Figure, hsv: Tuple[float,float,float], **kwargs):
+    def draw_fro(self, fig: go.Figure, keys: Dict[str,List['Weights']], hsv: Tuple[float,float,float], **kwargs):
         if self.is_lora:
             h, s, v = hsv
-            draw_fro(self.name, fig, self.up, name='Frobenius (lora_up)',     hsv=(h+0.05,s,v), marker=dict(symbol='triangle-up'), **kwargs)
-            draw_fro(self.name, fig, self.down, name='Frobenius (lora_down)', hsv=(h+0.10,s,v), marker=dict(symbol='triangle-down'), **kwargs)
-            draw_fro(self.name, fig, self.matmul, name='Frobenius (lora_ΔW)', hsv=(h+0.15,s,v), marker=dict(symbol='square'), **kwargs)
+            draw_fro(self.name, fig, keys, self.up, name='Frobenius (lora_up)',     hsv=(h+0.05,s,v), marker=dict(symbol='triangle-up'), **kwargs)
+            draw_fro(self.name, fig, keys, self.down, name='Frobenius (lora_down)', hsv=(h+0.10,s,v), marker=dict(symbol='triangle-down'), **kwargs)
+            draw_fro(self.name, fig, keys, self.matmul, name='Frobenius (lora_ΔW)', hsv=(h+0.15,s,v), marker=dict(symbol='square'), **kwargs)
         else:
-            draw_fro(self.name, fig, self.weights, name=f'Frobenius ({self.name})',  hsv=hsv, marker=dict(symbol='circle'), **kwargs)
+            draw_fro(self.name, fig, keys, self.weights, name=f'Frobenius ({self.name})',  hsv=hsv, marker=dict(symbol='circle'), **kwargs)
     
     def split_lora(self, weights: Dict[str, Dict[str, Any]]):
         up: Dict[str, Dict[str, Any]] = dict()
@@ -94,12 +94,21 @@ class Weights:
 def draw_mean(
     series_name: str,
     fig: go.Figure,
+    keys: Dict[str,List[Weights]],
     weights: Dict[str, Dict[str, Any]],
     hsv: Tuple[float,float,float] = (0.0,0.5,1.0),
     **kwargs
 ):
-    x = list(range(len(weights)))
-    y = [v['mean'] for v in weights.values()]
+    def get_value(k: str):
+        if k not in keys:
+            return np.nan
+        for v in weights.values():
+            if v['layer'].short_name == k:
+                return v['mean']
+        return np.nan
+    
+    x = list(range(len(keys)))
+    y = [ get_value(k) for k in keys.keys() ]
     
     color = ','.join(str(int(v*255)) for v in colorsys.hsv_to_rgb(*hsv))
     label_color = ','.join(str(int(v*255)) for v in colorsys.hsv_to_rgb(hsv[0], hsv[1]/2, hsv[2]))
@@ -134,6 +143,7 @@ def draw_mean(
 def draw_hist(
     series_name: str,
     fig: go.Figure,
+    keys: Dict[str,List[Weights]],
     weights: Dict[str, Dict[str, Any]],
     hmin: float,
     hmax: float,
@@ -159,6 +169,14 @@ def draw_hist(
     BINS = 500
     HEIGHT = height
     
+    def get_v(k: str) -> Union[Dict[str,Any],None]:
+        if k not in keys:
+            return None
+        for v in weights.values():
+            if v['layer'].short_name == k:
+                return v
+        return None
+    
     def lerp(v0: Union[np.ndarray,Iterable[float]], v1: Union[np.ndarray,Iterable[float]], t: float):
         if not isinstance(v0, np.ndarray):
             v0 = np.array(v0, dtype=float)
@@ -166,7 +184,11 @@ def draw_hist(
             v1 = np.array(v1, dtype=float)
         return v0 + t * (v1 - v0) # type: ignore
     
-    for x0, rs in enumerate(weights.values()):
+    for x0, key in enumerate(keys.keys()):
+        rs = get_v(key)
+        if rs is None:
+            continue
+        
         vs: Tensor = rs['values']
         #n = torch.numel(vs)
         hist, edges = torch.histogram(vs.float(), BINS, range=RANGE, density=False)
@@ -224,12 +246,21 @@ def draw_hist(
 def draw_fro(
     series_name: str,
     fig: go.Figure,
+    keys: Dict[str,List[Weights]],
     weights: Dict[str, Dict[str, Any]],
     hsv: Tuple[float,float,float] = (2/3,0.5,1.0),
     **kwargs
 ):
-    x = list(range(len(weights)))
-    y = [v['fro'] for v in weights.values()]
+    def get_value(k: str):
+        if k not in keys:
+            return np.nan
+        for v in weights.values():
+            if v['layer'].short_name == k:
+                return v['fro']
+        return np.nan
+    
+    x = list(range(len(keys)))
+    y = [ get_value(k) for k in keys.keys() ]
     
     color = ','.join(str(int(v*255)) for v in colorsys.hsv_to_rgb(*hsv))
     label_color = ','.join(str(int(v*255)) for v in colorsys.hsv_to_rgb(hsv[0], hsv[1]/2, hsv[2]))

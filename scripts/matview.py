@@ -70,6 +70,7 @@ class GraphColors:
 
 def build_graph(
     fig: go.Figure,
+    keys: Dict[str,List[Weights]],
     weights: Weights,
     width: float,
     height: float,
@@ -85,13 +86,16 @@ def build_graph(
     if 'Mean' in value:
         weights.draw_mean(
             fig,
+            keys,
             yaxis='y',
             hsv=colors.mean,
         )
     
     if 'Histogram' in value:
         weights.draw_hist(
-            fig, hmin=hmin, hmax=hmax, height=hist_height,
+            fig,
+            keys,
+            hmin=hmin, hmax=hmax, height=hist_height,
             yaxis='y',
             hsv_0=colors.hist_start,
             hsv_1=colors.hist_end,
@@ -100,6 +104,7 @@ def build_graph(
     if 'Frobenius' in value:
         weights.draw_fro(
             fig,
+            keys,
             yaxis=['y', 'y2'][fro_is_right],
             hsv=colors.fro,
         )
@@ -112,7 +117,7 @@ def build_graph(
         y2_title = ''
     
     x_title = 'layer'
-    x_ticks = [v['layer'].short_name for v in weights.values()]
+    x_ticks = [key for key in keys.keys()]
     
     fig.update_layout(
         autosize=False,
@@ -122,7 +127,7 @@ def build_graph(
         xaxis=dict(
             title=x_title,
             tickmode='array',
-            tickvals=list(range(len(weights))),
+            tickvals=list(range(len(x_ticks))),
             ticktext=x_ticks,
         ),
         yaxis=dict(
@@ -171,18 +176,33 @@ def show(
     
     fig = go.Figure()
     
-    def draw(name: str, model: Union[str,None], is_lora: bool, colors: GraphColors):
+    models: List[Tuple[str,Union[str,None],bool,GraphColors]] = [
+        ('Model A', model_A, False, GraphColors()),
+        ('Model B', model_B, False, GraphColors().shift(-0.05, 0.0, -0.05)),
+        ('LoRA A', lora_A, True, GraphColors().shift_hist(0.1)),
+        ('LoRA B', lora_B, True, GraphColors().shift(0.1, 0.2, 0.1))
+    ]
+    
+    # 1. retrieve sd keys
+    keys: Dict[str,List[Weights]] = dict() # actually I need "OrderedDefaultDict" here
+    weights: List[Tuple[Weights,GraphColors]] = []
+    for name, model, is_lora, colors in models:
         if model is not None and len(model) != 0:
-            # 1. retrieve tensor statistics
+            # 2. retrieve tensor statistics
             v = retrieve_weights2(model, is_lora, wb, network, layer, attn, lora, value)
             w = Weights(name, v, is_lora)
-            # 2. build graph
-            build_graph(fig, w, width, height, hmin, hmax, hist_height, value, colors)
+            
+            for val in v.values():
+                k = val['layer'].short_name
+                if k not in keys:
+                    keys[k] = []
+                keys[k].append(w)
+            
+            weights.append((w, colors))
     
-    draw('Model A', model_A, False, GraphColors())
-    draw('Model B', model_B, False, GraphColors().shift(-0.05, 0.0, -0.05))
-    draw('LoRA A', lora_A, True, GraphColors().shift_hist(0.1))
-    draw('LoRA B', lora_B, True, GraphColors().shift(0.1, 0.2, 0.1))
+    # 2. build graph
+    for w, colors in weights:
+        build_graph(fig, keys, w, width, height, hmin, hmax, hist_height, value, colors)
     
     return fig
 
@@ -210,15 +230,45 @@ def export_csv(
     io = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
     csv = csv_writer(io)
     
+    models: List[Tuple[str,Union[str,None],bool]] = [
+        ('Model A', model_A, False),
+        ('Model B', model_B, False),
+        ('LoRA A', lora_A, True),
+        ('LoRA B', lora_B, True)
+    ]
+    
+    # 1. retrieve sd keys
+    keys: Dict[str,List[Dict[str,Dict[str,Any]]]] = dict() # actually I need "OrderedDefaultDict" here
+    weights: Dict[str,Dict[str,Dict[str,Any]]] = dict()
+    for name, model, is_lora in models:
+        if model is not None and len(model) != 0:
+            # 2. retrieve tensor statistics
+            v = retrieve_weights2(model, is_lora, wb, network, layer, attn, lora, value)
+            
+            for val in v.values():
+                k = val['layer'].short_name
+                if k not in keys:
+                    keys[k] = []
+                keys[k].append(v)
+            
+            weights[model] = v
+    
     # header
     csv.writerow(['#', 'model name', 'layer name', 'value type', 'value'])
     
+    def get_value(key: str, weight: Dict[str,Any], value_type: str):
+        for val in weight.values():
+            if key == val['layer'].short_name:
+                return val[value_type]
+    
     def write(model: str, is_lora: bool, value_type: str):
-        # 1. retrieve tensor statistics
-        v = retrieve_weights2(model, is_lora, wb, network, layer, attn, lora, value)
-        # 2. build csv
-        for idx, val in enumerate(v.values()):
-            csv.writerow([idx, model, val['layer'].short_name, value_type, val[value_type]])
+        # retrieve tensor statistics
+        v = weights[model]
+        # 3. build csv
+        for idx, key in enumerate(keys.keys()):
+            val = get_value(key, v, value_type)
+            if val is not None:
+                csv.writerow([idx, model, key, value_type, val])
     
     def write_value_type(value_type: str):
         if model_A is not None and model_A != '':
