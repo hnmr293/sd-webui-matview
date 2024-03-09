@@ -161,6 +161,7 @@ def show(
     layer: List[str],
     attn: List[str],
     lora: List[str],
+    key: str,
     value: List[str]
 ):
     if len(hmin) == 0: # type: ignore
@@ -189,7 +190,7 @@ def show(
     for name, model, is_lora, colors in models:
         if model is not None and len(model) != 0:
             # 2. retrieve tensor statistics
-            v = retrieve_weights2(model, is_lora, wb, network, layer, attn, lora, value)
+            v = retrieve_weights2(model, is_lora, wb, network, layer, attn, lora, key, value)
             w = Weights(name, v, is_lora)
             
             for val in v.values():
@@ -346,6 +347,7 @@ def add_tab():
                     layer_type = gr.CheckboxGroup(choices=['Linear', 'Conv', 'SAttn', 'XAttn', 'Norm'], value=['SAttn', 'XAttn'], label='Layer Type')
                     attn_type = gr.CheckboxGroup(choices=['Q', 'K', 'V', 'Out'], value=['Q', 'K', 'V'], label='Attentions')
                     lora_type = gr.CheckboxGroup(choices=['up', 'down', 'ΔW'], value=['up', 'down'], label='LoRA')
+                key_filter = gr.Textbox(placeholder='regexp available', label='Key filter')
                 value_type = gr.CheckboxGroup(choices=['Mean', 'Frobenius', 'Histogram'], value=['Mean'], label='Value')
         
         err = gr.HTML(elem_id='matview-error')
@@ -357,7 +359,7 @@ def add_tab():
     
         refresh.click(fn=wrap(reload_models), inputs=[], outputs=[model_A, model_B, err])
         refresh_loras.click(fn=wrap(reload_loras), inputs=[], outputs=[lora_A, lora_B, err])
-        run.click(fn=wrap(show), inputs=[model_A, model_B, lora_A, lora_B, width, height, min, max, hist_height, wb, network, layer_type, attn_type, lora_type, value_type], outputs=[plot, err])
+        run.click(fn=wrap(show), inputs=[model_A, model_B, lora_A, lora_B, width, height, min, max, hist_height, wb, network, layer_type, attn_type, lora_type, key_filter, value_type], outputs=[plot, err])
         csv.click(fn=wrap(export_csv), inputs=[model_A, model_B, lora_A, lora_B, width, height, min, max, hist_height, wb, network, layer_type, attn_type, lora_type, value_type], outputs=[exported_file, err])
     
     return [(ui, NAME, NAME.lower())]

@@ -1,4 +1,5 @@
 from typing import Any, Union, List, Dict, Callable
+import re
 
 import torch
 from torch import Tensor
@@ -264,6 +265,7 @@ def retrieve_weights2(
     layer: List[str],
     attn: List[str],
     lora: List[str],
+    key: str,
     value: List[str]
 ):
     # retrieve tensor statistics
@@ -298,9 +300,16 @@ def retrieve_weights2(
     if 'down' in lora: rt |= LT.LoraDown
     if 'ΔW' in lora:   rt |= LT.LoraMatMul
     
+    if len(key) != 0:
+        key_re = re.compile(key)
+    else:
+        key_re = None
+    
     def filter(layer: Layer) -> bool:
         #if layer.type & LT.UNet:
         #    import pdb; pdb.set_trace()
+        if key_re and not key_re.search(layer.original_name):
+            return False
         t = layer.type
         x = ((t & wt) and (t & nt) and (t & lt))
         if at != LT.NONE and ((x & LT.SAttn) or (x & LT.XAttn)):
