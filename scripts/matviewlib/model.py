@@ -303,7 +303,7 @@ def retrieve_weights2(
         #    import pdb; pdb.set_trace()
         t = layer.type
         x = ((t & wt) and (t & nt) and (t & lt))
-        if at != LT.NONE:
+        if at != LT.NONE and ((x & LT.SAttn) or (x & LT.XAttn)):
             x = x and (t & at)
         if is_lora and rt != LT.NONE:
             x = x and (t & rt)
