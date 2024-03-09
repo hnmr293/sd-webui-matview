@@ -78,7 +78,7 @@ def retrieve_weights(
                 layer_type |= LT.Conv
                 
         
-        if layers[0] == 'cond_stage_model':
+        if layers[0] == 'cond_stage_model' or layers[0] == 'conditioner':
             # text encoder
             layer_type |= LT.TextEncoder
             short_name = '.'.join(['TE'] + layers[3:])
